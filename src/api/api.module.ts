@@ -7,6 +7,7 @@ import { AppExceptionFilter } from '@/api/common/filters/app-exception.filter';
 import { ResponseInterceptor } from '@/api/common/interceptors/response.interceptor';
 import { DocumentsModule } from '@/api/modules/documents/documents.module';
 import { HealthModule } from '@/api/modules/health/health.module';
+import { JobsModule } from '@/api/modules/jobs/jobs.module';
 import { AdaptersModule } from '@/shared/adapters/adapters.module';
 import { ConfigModule } from '@/shared/config/config.module';
 import { DbModule } from '@/shared/db/db.module';
@@ -22,6 +23,7 @@ import { LoggerModule } from '@/shared/logging/logger.module';
     AdaptersModule,
     HealthModule,
     DocumentsModule,
+    JobsModule,
   ],
   providers: [
     { provide: APP_PIPE, useClass: ZodValidationPipe },
