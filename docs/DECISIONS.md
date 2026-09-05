@@ -152,4 +152,17 @@
 - **也考慮過**：統一信封 `{ "success": bool, "data": …, "error": …, "request_id": … }`，成功與失敗形狀完全相同。
 - **為什麼**：`success` 與 HTTP 狀態碼是同一件事講兩次，呼叫端本來就得看狀態碼；統一信封讓每個 GET 多一層 `data`，Swagger 的 schema 也得多包一層才對得上。攤平的成功回應就是資源本身，文件與型別一對一。失敗包在 `error` 底下是為了讓呼叫端用一個固定路徑取 `code` 決定要重試、修輸入還是放棄。這是 Stripe、GitHub 等公開 API 的慣例，對接的人不用學新規則。
 
+### D-25 `content_text` 由 API 先寫進 StoragePort，之後與 `storage_key` 走完全相同的路徑
+
+- **決定**：POST 帶 `content_text` 時，API 在交易開始前先用 ULID 產生 `document_id`（D-22），決定 `storage_key = ${workspace_id}/inline/${document_id}.txt`（`text/markdown` 用 `.md`），呼叫 `StoragePort.put()` 寫入，再開交易寫 `documents`／`jobs`／`idempotency_keys`／`pgmq.send`。client 不能對 `content_text` 指定 `storage_key`。worker 的 extracting 階段一律從 StoragePort 讀、依 `mime_type` 解析，不知道也不需要知道文件是貼進來的還是上傳的。`extracted_text` 永遠是 worker 的產物，API 不寫它。`storage_key` 維持 NOT NULL。
+  順序與失敗處理：
+  1. 交易外先查 `idempotency_keys`：已有且 `request_hash` 相同 → 直接回存好的回應，不碰 StoragePort；不同 → 409。
+  2. `StoragePort.put()`。
+  3. 單一交易：`INSERT INTO idempotency_keys ... ON CONFLICT DO NOTHING` 搶 key（§8 的原子性與併發等待不變）→ 寫 documents／jobs → `pgmq.send` → 更新冪等列的回應。
+  4. 交易失敗（含極少數併發下步驟 3 搶不到 key）：best-effort `StoragePort.delete()`；刪不掉記一行 warn 帶 `storage_key`。留下的孤兒檔不被任何 document 指到、不影響正確性，README「已知限制」寫一句，正式環境用 Cloud Storage lifecycle rule 清。
+- **也考慮過**：API 直接把 `content_text` 寫進 `documents.extracted_text`、`storage_key` 改為可 null，worker 看 checkpoint 已有就跳過抽取。
+- **為什麼**：只有一條處理路徑。另一案讓 extracting 有兩種語意——「已抽取」跟「不需要抽取」共用同一個欄位——checkpoint 判斷變模糊，`[[FAIL_EXTRACT]]` 對純文字也會失效。它也違反 §4 與 D-21「原始內容不進資料庫，資料庫只放 metadata 與抽取後的文字」。維持 NOT NULL 就不用改表。正式環境貼上的文字同樣落 Cloud Storage 一份當原始來源，之後 reprocess 才有東西可重跑。
+
+## 待決
+
 - Chunk 切割策略與 overlap 大小（實作 worker 時定）。

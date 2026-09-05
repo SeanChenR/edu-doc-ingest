@@ -643,6 +643,8 @@ Worker 端的錯誤碼（寫入 `jobs.last_error_code`，不對應 HTTP）：
    - 併發時：主鍵衝突會讓後到者等前一筆交易 commit，因此讀到的 `response_body` 已完整。
 5. 過期列清理：本次不做，README 提 worker 定時清除。
 
+帶 `content_text` 的請求在進入上述交易之前，先在交易外查一次 `idempotency_keys`（重播不寫第二個檔），再 `StoragePort.put()` 到 `${workspace_id}/inline/${document_id}.txt`，之後與 `storage_key` 走完全相同的路徑；交易失敗時 best-effort 刪檔。見 D-25。
+
 ---
 
 ## 9. Worker 與處理流程
@@ -805,6 +807,7 @@ APP_DB_PASSWORD=app_pass                                                     # m
 WORKER_DB_PASSWORD=worker_pass                                               # migrate.ts 建 worker_user 用
 DB_CONNECT_RETRY_SEC=30            # 啟動時等待資料庫的上限
 LOG_LEVEL=info
+LOG_PRETTY=true                   # 本機用 pino-pretty 印可讀格式；正式環境設 false 保持 JSON
 
 MAX_DOCUMENT_BYTES=10485760
 ALLOWED_MIME_TYPES=application/pdf,text/plain,text/markdown
