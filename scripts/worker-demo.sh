@@ -3,6 +3,8 @@
 # GET 端點要到 slice 4 才有，所以狀態用 psql 直接看資料庫。
 # 前置：api 與 worker 在跑（另一個終端機 `bun run dev`），.env 有 DATABASE_URL_ADMIN。
 # 用法：scripts/worker-demo.sh
+# 對 podman compose 的 stack 跑時，api 在容器裡、資料在容器 db（port 5433），要覆寫連線：
+#   DATABASE_URL_ADMIN=postgres://postgres:postgres@localhost:5433/doc_ingest scripts/worker-demo.sh
 set -euo pipefail
 
 if [[ -f .env ]]; then

@@ -16,7 +16,9 @@ step "0. podman machine"
 podman machine list --format '{{.Name}} running={{.Running}}'
 podman info --format 'podman {{.Version.Version}}' >/dev/null || { echo "podman machine 沒在跑：podman machine start"; exit 1; }
 
-if lsof -nP -iTCP:3000 -sTCP:LISTEN >/dev/null 2>&1; then
+# api 容器已經在跑時 port 3000 是 podman 自己占的，那是正常的
+API_UP="$(podman ps --filter name=edu-doc-ingest-api-1 --filter status=running --format '{{.Names}}')"
+if [[ -z "$API_UP" ]] && lsof -nP -iTCP:3000 -sTCP:LISTEN >/dev/null 2>&1; then
   echo "port 3000 已被占用（大概是 bun run dev），先停掉再跑"; exit 1
 fi
 
@@ -33,6 +35,10 @@ sql "select version()" | cut -c1-40
 step "3. migrate + seed 對容器 db（5433）"
 DATABASE_URL_ADMIN="$ADMIN_URL" bun run migrate
 DATABASE_URL_ADMIN="$ADMIN_URL" bun run seed
+# seed 把範例 PDF 寫在宿主機的 ./storage；容器用的是 volume，另外放一份進去
+podman exec edu-doc-ingest-api-1 mkdir -p /app/storage/ws_alpha/samples /app/storage/ws_beta/samples
+podman cp scripts/fixtures/unit-3-fractions.pdf edu-doc-ingest-api-1:/app/storage/ws_alpha/samples/unit-3-fractions.pdf
+podman cp scripts/fixtures/unit-3-fractions.pdf edu-doc-ingest-api-1:/app/storage/ws_beta/samples/unit-3-fractions.pdf
 
 step "4. 等 api 容器就緒"
 for _ in $(seq 1 30); do curl -sf -o /dev/null "$API_URL/health" && break; sleep 1; done
