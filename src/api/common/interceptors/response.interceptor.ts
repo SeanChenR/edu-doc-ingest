@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { map, type Observable } from 'rxjs';
 
-import { currentRequestId } from '@/api/common/request-id/request-context';
+import { currentRequestId } from '@/shared/request-context';
 
 // docs/DESIGN.md §6.1、D-24：成功回應把資源欄位攤平在最上層，末尾附 request_id。
 // X-Request-Id 標頭由 RequestIdMiddleware 負責。
