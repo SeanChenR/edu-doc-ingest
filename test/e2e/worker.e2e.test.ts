@@ -1,10 +1,11 @@
 // docs/DESIGN.md §11.1：成功流程（文字、PDF）、重試成功、重試耗盡、checkpoint、失敗注入。
 // api 與 worker 都在測試程序內：POST 建任務，然後直接呼叫 WorkerService.pollOnce()，不靠背景 process。
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 
 import type { INestApplication, INestApplicationContext } from '@nestjs/common';
 import request from 'supertest';
 
+import { PARSER, type ParserPort } from '@/shared/ports/parser.port';
 import type { WorkerService } from '@/worker/worker.service';
 
 import { ALPHA_KEY, adminQuery, bootApp, bootWorker, resetTenantData } from './helpers';
@@ -151,6 +152,8 @@ describe('worker pipeline', () => {
 
   test('[[FAIL_EMBED_ONCE]]: retry succeeds on attempt 2, extraction checkpoint reused, no duplicate chunks', async () => {
     const { document_id, job_id } = await createDocument(textDoc('[[FAIL_EMBED_ONCE]] retry me'));
+    // §11.1「Checkpoint」：spy 證明第二次 attempt 沒再呼叫 parser
+    const parse = spyOn(workerCtx.get<ParserPort>(PARSER), 'parse');
     await worker.pollOnce();
     let j = await job(job_id);
     expect(j.status).toBe('queued');
@@ -170,6 +173,8 @@ describe('worker pipeline', () => {
     // 第 2 次沒有重抽：extracted 事件只出現一次，checkpoint 事件出現一次
     expect(ev.filter((e) => e.message === 'text extracted')).toHaveLength(1);
     expect(ev.filter((e) => e.message === 'extraction checkpoint reused')).toHaveLength(1);
+    expect(parse).toHaveBeenCalledTimes(1);
+    parse.mockRestore();
 
     const chunkRows = await adminQuery(
       (sql) => sql`select chunk_index from document_chunks where document_id = ${document_id}`,
