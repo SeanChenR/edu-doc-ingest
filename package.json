@@ -7,6 +7,7 @@
   "author": "",
   "type": "module",
   "scripts": {
+    "dev": "bun --bun scripts/dev.ts",
     "dev:api": "bun --bun --watch src/api/main.ts",
     "dev:worker": "bun --bun --watch src/worker/main.ts",
     "test": "bun test",
