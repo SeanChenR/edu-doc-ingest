@@ -2,7 +2,7 @@ import { type ArgumentsHost, Catch, type ExceptionFilter, HttpException } from '
 import type { Response } from 'express';
 import { InjectPinoLogger, PinoLogger } from 'nestjs-pino';
 import { ZodValidationException } from 'nestjs-zod';
-import type { ZodError } from 'zod';
+import { ZodError } from 'zod';
 
 import { currentRequestId } from '@/api/common/request-id/request-context';
 import { AppError, type ErrorDetail } from '@/shared/errors/app-error';
@@ -54,7 +54,8 @@ function translate(e: unknown): Translated {
     return { status: e.status, code: e.code, message: e.message, details: e.details };
   }
   if (e instanceof ZodValidationException) {
-    const issues = (e.getZodError() as ZodError).issues;
+    const zodError = e.getZodError();
+    const issues = zodError instanceof ZodError ? zodError.issues : [];
     return {
       status: 400,
       code: ErrorCode.VALIDATION_ERROR,

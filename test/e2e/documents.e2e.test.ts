@@ -42,6 +42,10 @@ const post = (
   return key === null ? req : req.set('Idempotency-Key', key);
 };
 
+type ErrorBody = { error: Record<string, unknown> };
+// 比對兩個錯誤 body 時忽略 request_id
+const strip = (b: ErrorBody): ErrorBody => ({ ...b, error: { ...b.error, request_id: 'X' } });
+
 function expectError(res: request.Response, status: number, code: string): void {
   expect(res.status).toBe(status);
   expect(res.body.error.code).toBe(code);
@@ -185,8 +189,6 @@ describe('POST /v1/workspaces/:workspaceId/documents', () => {
       expectError(cross, 404, 'NOT_FOUND');
       const missing = await post(validBody, nextKey(), ALPHA_KEY, '/v1/workspaces/ws_alpha/nope');
       expectError(missing, 404, 'NOT_FOUND');
-      type ErrorBody = { error: Record<string, unknown> };
-      const strip = (b: ErrorBody): ErrorBody => ({ ...b, error: { ...b.error, request_id: 'X' } });
       expect(strip(cross.body)).toEqual(strip(missing.body));
     });
 
