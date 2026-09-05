@@ -276,6 +276,7 @@ doc-ingest/
 | extracted_text | text null | 抽取完成後寫入（checkpoint） |
 | page_count | integer null | |
 | chunk_count | integer null | |
+| metadata | jsonb null | 呼叫端自訂 JSON（§5.3 的 `metadata`），序列化後 ≤ 4 KB（§6.4） |
 | deleted_at | timestamptz null | 軟刪除 |
 | created_at / updated_at | timestamptz | |
 

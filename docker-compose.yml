@@ -1,0 +1,67 @@
+# docs/DESIGN.md §1.5, §12, D-19, D-23. Run with `podman compose up` (Docker-compatible).
+# Host port 5433 avoids clashing with a local Homebrew PostgreSQL on 5432.
+# Migrations and seed run from the host against the container:
+#   DATABASE_URL_ADMIN=postgres://postgres:postgres@localhost:5433/doc_ingest bun run migrate
+services:
+  db:
+    image: pgvector/pgvector:pg18-trixie
+    environment:
+      POSTGRES_DB: doc_ingest
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - '5433:5432'
+    volumes:
+      - db-data:/var/lib/postgresql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d doc_ingest']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      target: api
+    environment:
+      PORT: 3000
+      DATABASE_URL: postgres://app_user:${APP_DB_PASSWORD:-app_pass}@db:5432/doc_ingest
+      DATABASE_URL_WORKER: postgres://worker_user:${WORKER_DB_PASSWORD:-worker_pass}@db:5432/doc_ingest
+      DB_CONNECT_RETRY_SEC: 30
+      STORAGE_ROOT: /app/storage
+    ports:
+      - '3000:3000'
+    volumes:
+      - storage:/app/storage
+    depends_on:
+      - db
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'bun',
+          '-e',
+          "fetch('http://localhost:3000/health').then(r => process.exit(r.ok ? 0 : 1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  worker:
+    build:
+      context: .
+      target: worker
+    environment:
+      DATABASE_URL: postgres://app_user:${APP_DB_PASSWORD:-app_pass}@db:5432/doc_ingest
+      DATABASE_URL_WORKER: postgres://worker_user:${WORKER_DB_PASSWORD:-worker_pass}@db:5432/doc_ingest
+      DB_CONNECT_RETRY_SEC: 30
+      STORAGE_ROOT: /app/storage
+    volumes:
+      - storage:/app/storage
+    depends_on:
+      - db
+    # ponytail: no HTTP surface to probe; a worker healthcheck lands with the poll loop in slice 3.
+
+volumes:
+  db-data:
+  storage:

@@ -1,0 +1,6 @@
+node_modules
+.git
+storage
+.env
+docs
+.claude
