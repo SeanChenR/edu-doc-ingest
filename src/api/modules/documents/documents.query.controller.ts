@@ -1,5 +1,6 @@
 import { Controller, Get, Param } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ZodSerializerDto } from 'nestjs-zod';
 
 import { CurrentWorkspace } from '@/api/common/auth/current-workspace.decorator';
 import type { WorkspaceContext } from '@/api/common/auth/workspace-context';
@@ -22,6 +23,7 @@ export class DocumentsQueryController {
     summary: 'Document metadata, latest job summary and result summary (docs/DESIGN.md §5.3)',
   })
   @ApiParam({ name: 'documentId', example: 'doc_01J...' })
+  @ZodSerializerDto(DocumentResponseDto)
   @ApiResponse({ status: 200, type: DocumentResponseDto })
   @ApiResponse({ status: 401, type: ErrorResponseDto, description: 'UNAUTHORIZED' })
   @ApiResponse({

@@ -1,5 +1,6 @@
 import { Controller, Get, Param } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ZodSerializerDto } from 'nestjs-zod';
 
 import { CurrentWorkspace } from '@/api/common/auth/current-workspace.decorator';
 import type { WorkspaceContext } from '@/api/common/auth/workspace-context';
@@ -16,6 +17,7 @@ export class JobsController {
   @Get(':jobId')
   @ApiOperation({ summary: 'Job status, progress, attempt and last error (docs/DESIGN.md §5.4)' })
   @ApiParam({ name: 'jobId', example: 'job_01J...' })
+  @ZodSerializerDto(JobResponseDto)
   @ApiResponse({ status: 200, type: JobResponseDto })
   @ApiResponse({ status: 401, type: ErrorResponseDto, description: 'UNAUTHORIZED' })
   @ApiResponse({
