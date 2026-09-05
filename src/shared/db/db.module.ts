@@ -12,8 +12,10 @@ import { ENV } from '@/shared/config/config.module';
 import type { Env } from '@/shared/config/env';
 import { connectWithRetry, createDb, type Db } from '@/shared/db/client';
 import { ApiKeysRepository } from '@/shared/db/repositories/api-keys.repository';
+import { DocumentChunksRepository } from '@/shared/db/repositories/document-chunks.repository';
 import { DocumentsRepository } from '@/shared/db/repositories/documents.repository';
 import { IdempotencyKeysRepository } from '@/shared/db/repositories/idempotency-keys.repository';
+import { JobEventsRepository } from '@/shared/db/repositories/job-events.repository';
 import { JobsRepository } from '@/shared/db/repositories/jobs.repository';
 
 export const DB = Symbol('DB');
@@ -26,6 +28,8 @@ const REPOSITORIES = [
   DocumentsRepository,
   JobsRepository,
   IdempotencyKeysRepository,
+  JobEventsRepository,
+  DocumentChunksRepository,
 ];
 
 @Injectable()

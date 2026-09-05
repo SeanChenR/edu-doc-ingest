@@ -27,7 +27,7 @@ export class PgmqQueue implements QueuePort {
   async read(db: Db, qty: number, vtSec: number): Promise<QueueMessage[]> {
     const rows: MessageRecord[] = await db`
       select msg_id, read_ct, message from pgmq.read(${QUEUE_NAME}, ${vtSec}, ${qty})`;
-    return rows.map((r) => ({ msgId: String(r.msg_id), readCt: r.read_ct, message: r.message }));
+    return rows.map((r) => ({ msgId: r.msg_id, readCt: r.read_ct, message: r.message }));
   }
 
   async archive(sql: Db | Tx, msgId: string): Promise<void> {

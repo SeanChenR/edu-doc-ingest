@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { InjectPinoLogger, PinoLogger } from 'nestjs-pino';
+import { PinoLogger } from 'nestjs-pino';
 
 import type { WorkspaceContext } from '@/api/common/auth/workspace-context';
 import type { CreateDocumentDto } from '@/api/modules/documents/documents.dto';
@@ -50,8 +50,11 @@ export class DocumentsService {
     private readonly documents: DocumentsRepository,
     private readonly jobs: JobsRepository,
     private readonly idempotency: IdempotencyService,
-    @InjectPinoLogger(DocumentsService.name) private readonly log: PinoLogger,
-  ) {}
+    private readonly log: PinoLogger,
+  ) {
+    // 用 setContext 而不是 @InjectPinoLogger：後者的 token 靠 LoggerModule 建立時的掃描順序決定，太脆弱
+    this.log.setContext(DocumentsService.name);
+  }
 
   async create(
     ws: WorkspaceContext,

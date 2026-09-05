@@ -1,11 +1,15 @@
 import { Module } from '@nestjs/common';
 
+import { AdaptersModule } from '@/shared/adapters/adapters.module';
 import { ConfigModule } from '@/shared/config/config.module';
 import { DbModule } from '@/shared/db/db.module';
+import { LoggerModule } from '@/shared/logging/logger.module';
+import { JobEventsService } from '@/worker/job-events.service';
+import { PipelineService } from '@/worker/pipeline/pipeline.service';
 import { WorkerService } from '@/worker/worker.service';
 
 @Module({
-  imports: [ConfigModule, DbModule.register('DATABASE_URL_WORKER')],
-  providers: [WorkerService],
+  imports: [ConfigModule, LoggerModule, DbModule.register('DATABASE_URL_WORKER'), AdaptersModule],
+  providers: [JobEventsService, PipelineService, WorkerService],
 })
 export class WorkerModule {}
