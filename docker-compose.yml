@@ -60,7 +60,18 @@ services:
       - storage:/app/storage
     depends_on:
       - db
-    # ponytail: no HTTP surface to probe; a worker healthcheck lands with the poll loop in slice 3.
+    # 沒有 HTTP 介面：看主迴圈每輪 touch 的 heartbeat 檔，30 秒內有更新就算健康
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'bun',
+          '-e',
+          "process.exit(Date.now() - Bun.file('/app/storage/.worker-heartbeat').lastModified < 30000 ? 0 : 1)",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
 volumes:
   db-data:
