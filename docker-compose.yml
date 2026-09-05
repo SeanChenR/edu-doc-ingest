@@ -56,6 +56,9 @@ services:
       DATABASE_URL_WORKER: postgres://worker_user:${WORKER_DB_PASSWORD:-worker_pass}@db:5432/doc_ingest
       DB_CONNECT_RETRY_SEC: 30
       STORAGE_ROOT: /app/storage
+      # compose 是驗收環境：預設開失敗注入讓 [[FAIL_*]] 標記可用（§9.5）；正式環境設 false
+      FAILURE_INJECTION: ${FAILURE_INJECTION:-true}
+      STAGE_DELAY_MS: ${STAGE_DELAY_MS:-800}
     volumes:
       - storage:/app/storage
     depends_on:

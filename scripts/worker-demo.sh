@@ -7,13 +7,15 @@
 #   DATABASE_URL_ADMIN=postgres://postgres:postgres@localhost:5433/doc_ingest scripts/worker-demo.sh
 set -euo pipefail
 
+# 指令列給的變數優先，.env 只補沒設定的
+PRESET_DB="${DATABASE_URL_ADMIN:-}"; PRESET_API="${API_URL:-}"
 if [[ -f .env ]]; then
   # shellcheck disable=SC1091
   set -a; source .env; set +a
 fi
-API_URL="${API_URL:-http://localhost:3000}"
+API_URL="${PRESET_API:-${API_URL:-http://localhost:3000}}"
 KEY="${API_KEY_ALPHA:-${SEED_API_KEY_ALPHA:?set API_KEY_ALPHA}}"
-DB="${DATABASE_URL_ADMIN:?set DATABASE_URL_ADMIN}"
+DB="${PRESET_DB:-${DATABASE_URL_ADMIN:?set DATABASE_URL_ADMIN}}"
 RUN="demo-$(date +%s)"
 JOB_IDS=()
 
