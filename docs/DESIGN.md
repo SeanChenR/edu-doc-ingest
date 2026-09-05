@@ -689,7 +689,7 @@ catch (err):
 | 階段 | 進度 | 做什麼 | 冪等保證 |
 |---|---|---|---|
 | `extracting` | 10 → 40 | 從 StoragePort 讀檔（或直接用 `content_text`），呼叫 ParserPort 取得純文字與 page_count，寫入 `documents.extracted_text` | 若 `extracted_text` 已存在則跳過整段（checkpoint） |
-| `embedding` | 40 → 90 | 切 chunk（策略待實作時決定，先預留 `ChunkerPort`），逐批呼叫 EmbeddingPort，upsert `document_chunks`；每批完成推一次 `progress` | `(document_id, chunk_index)` 唯一鍵 upsert；重試從已存在的 chunk 之後接續，不重算 |
+| `embedding` | 40 → 90 | 切 chunk（D-26：固定字元視窗 + overlap，段落邊界優先），逐批呼叫 EmbeddingPort，upsert `document_chunks`；每批完成推一次 `progress` | `(document_id, chunk_index)` 唯一鍵 upsert；重試從已存在的 chunk 之後接續，不重算 |
 | `ready` | 100 | 更新 `documents.status/chunk_count`、`jobs.status = ready`、`finished_at` | 只寫狀態 |
 
 「不可逆副作用」在本專案就是：對外部 embedding 服務的付費呼叫、寫入 chunk。前者靠 checkpoint 避免重複計費，後者靠唯一鍵。
@@ -737,7 +737,7 @@ pipeline 層在呼叫 Parser / Embedding 前檢查文件內容或檔名中的標
 | `ParserPort` | `parse(bytes, mime) → { text, pageCount }` | `UnpdfParser`：PDF 走 `unpdf` 抽文字與頁數；text / markdown 直接 UTF-8 解碼 | 圖片、表格較多的教材另評估 MarkItDown sidecar 或多模態 LLM 抽取 |
 | `EmbeddingPort` | `embed(texts[]) → number[][]`、`dimensions`、`modelName` | `MockEmbedding`（sha256 → 1536 維確定性向量，正規化） | 經 LiteLLM gateway 接 Vertex AI / OpenAI `text-embedding-3-small`，加限流與成本紀錄 |
 | `QueuePort` | `enqueue(job)`、`read(n, vt)`、`ack(msgId)`、`nack(msgId, delay)` | `PgmqQueue` | 同 pgmq（Cloud SQL 若不支援擴充套件則用純 SQL 安裝），或 Cloud Tasks |
-| `ChunkerPort` | `chunk(text) → { index, content, tokenCount }[]` | 先做固定長度 + overlap 的簡單版 | 依標題 / 段落結構切分（待實作時決定） |
+| `ChunkerPort` | `chunk(text) → { index, content, tokenCount }[]` | `FixedWindowChunker`：固定字元視窗 + overlap，段落邊界優先（D-26） | 依標題 / 段落結構切分 |
 
 本次每個 Port 只有一個實作，透過 Nest 的 provider 綁定；`bun test` 不需要任何外部金鑰或網路。
 
@@ -815,6 +815,8 @@ IDEMPOTENCY_TTL_HOURS=24
 
 STORAGE_ROOT=./storage
 EMBEDDING_DIMENSIONS=1536
+CHUNK_SIZE=1000                   # chunk 視窗（字元），見 D-26
+CHUNK_OVERLAP=200                 # 相鄰 chunk 重疊（字元）
 STAGE_DELAY_MS=800                # 每階段人為延遲，讓 SSE 看得到進度；正式環境設 0
 FAILURE_INJECTION=true            # 啟用 [[FAIL_*]] 標記；正式環境設 false
 
@@ -846,5 +848,4 @@ SEED_API_KEY_BETA=dk_beta_local_only
 
 ## 15. 待決事項（實作時再定）
 
-- Chunk 切割策略與 overlap 大小。
 - Zod vs class-validator 最終選擇（傾向 Zod + `nestjs-zod`，理由：同一份 schema 同時給驗證、型別、Swagger）。
