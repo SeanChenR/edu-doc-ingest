@@ -807,6 +807,7 @@ APP_DB_PASSWORD=app_pass                                                     # m
 WORKER_DB_PASSWORD=worker_pass                                               # migrate.ts 建 worker_user 用
 DB_CONNECT_RETRY_SEC=30            # 啟動時等待資料庫的上限
 LOG_LEVEL=info
+LOG_PRETTY=true                   # 本機用 pino-pretty 印可讀格式；正式環境設 false 保持 JSON
 
 MAX_DOCUMENT_BYTES=10485760
 ALLOWED_MIME_TYPES=application/pdf,text/plain,text/markdown

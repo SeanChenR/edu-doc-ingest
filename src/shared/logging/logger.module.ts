@@ -1,4 +1,5 @@
 import { LoggerModule as PinoLoggerModule } from 'nestjs-pino';
+import type { DestinationStream } from 'pino';
 
 import { ENV } from '@/shared/config/config.module';
 import type { Env } from '@/shared/config/env';
@@ -23,15 +24,33 @@ const REDACT_PATHS = [
 
 const HEALTH_PATHS = new Set(['/health', '/ready']);
 
+// 本機開發：in-process 的 pino-pretty stream（不用 transport 的 worker thread，Bun 上較穩）。
+// 正式環境 LOG_PRETTY=false，輸出原生 JSON 給 Cloud Logging。
+// 用動態 import：pino-pretty 若進靜態 import 圖，`bun --bun` 下會改變模組評估順序，
+// 讓 nestjs-pino（CJS）在 @nestjs/common（ESM）評估完成前 require 它而失敗。
+async function prettyStream(): Promise<DestinationStream> {
+  const { default: pinoPretty } = await import('pino-pretty');
+  return pinoPretty({
+    colorize: true,
+    translateTime: 'SYS:HH:MM:ss.l',
+    ignore: 'pid,hostname,context,req,res,responseTime',
+    messageFormat: '[{context}] {msg}',
+  });
+}
+
 export const LoggerModule = PinoLoggerModule.forRootAsync({
   inject: [ENV],
-  useFactory: (env: Env) => ({
-    pinoHttp: {
+  useFactory: async (env: Env) => {
+    const options = {
       level: env.LOG_LEVEL,
       // request id 由 RequestIdMiddleware 決定並寫進回應標頭，這裡沿用同一個值
-      genReqId: (_req, res) => String(res.getHeader('X-Request-Id') ?? ''),
-      autoLogging: { ignore: (req) => HEALTH_PATHS.has(req.url ?? '') },
+      genReqId: (_req: unknown, res: { getHeader(name: string): unknown }) => {
+        const id = res.getHeader('X-Request-Id');
+        return typeof id === 'string' ? id : '';
+      },
+      autoLogging: { ignore: (req: { url?: string }) => HEALTH_PATHS.has(req.url ?? '') },
       redact: { paths: REDACT_PATHS, censor: '[Redacted]' },
-    },
-  }),
+    };
+    return { pinoHttp: env.LOG_PRETTY ? [options, await prettyStream()] : options };
+  },
 });
