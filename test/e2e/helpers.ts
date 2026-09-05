@@ -1,10 +1,11 @@
 // e2e 共用：對 .env 的 doc_ingest 跑（grill 決定 (a)），每個測試檔開頭清空租戶表與佇列。
 // 先靜態 import @nestjs/common 讓它的 top-level await 評估完，app 用動態 import（見 src/api/main.ts）。
 import '@nestjs/common';
-import type { INestApplication } from '@nestjs/common';
+import type { INestApplication, INestApplicationContext } from '@nestjs/common';
 import { SQL } from 'bun';
 
 import { QUEUE_NAME } from '@/shared/ports/queue.port';
+import type { WorkerService } from '@/worker/worker.service';
 
 function requireEnv(name: string): string {
   const v = process.env[name];
@@ -22,6 +23,7 @@ export async function resetTenantData(): Promise<void> {
   try {
     await sql`truncate document_chunks, job_events, jobs, documents, idempotency_keys`;
     await sql`select pgmq.purge_queue(${QUEUE_NAME})`;
+    await sql`delete from pgmq.a_document_jobs`;
   } finally {
     await sql.close();
   }
@@ -43,4 +45,17 @@ export async function bootApp(): Promise<INestApplication> {
   const app = await createApp();
   await app.init();
   return app;
+}
+
+// worker 的 Nest context；不呼叫 run()，測試自己呼叫 pollOnce()
+export async function bootWorker(): Promise<{
+  ctx: INestApplicationContext;
+  worker: WorkerService;
+}> {
+  process.env['LOG_LEVEL'] = process.env['TEST_LOG_LEVEL'] ?? 'silent';
+  const { NestFactory } = await import('@nestjs/core');
+  const { WorkerModule } = await import('@/worker/worker.module');
+  const { WorkerService: Service } = await import('@/worker/worker.service');
+  const ctx = await NestFactory.createApplicationContext(WorkerModule, { logger: false });
+  return { ctx, worker: ctx.get(Service) };
 }

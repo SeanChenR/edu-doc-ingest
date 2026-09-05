@@ -3,10 +3,13 @@ import 'reflect-metadata';
 import '@nestjs/common';
 
 const { NestFactory } = await import('@nestjs/core');
+const { Logger } = await import('nestjs-pino');
 const { WorkerModule } = await import('@/worker/worker.module');
+const { WorkerService } = await import('@/worker/worker.service');
 
-const app = await NestFactory.createApplicationContext(WorkerModule);
-// SIGTERM / SIGINT 由 Nest 處理：跑 onApplicationShutdown、關閉 context、結束 process。
-// 在 poll loop（slice 3）進來之前，沒有其他東西讓 event loop 忙碌。
+const app = await NestFactory.createApplicationContext(WorkerModule, { bufferLogs: true });
+app.useLogger(app.get(Logger));
+// SIGTERM / SIGINT：Nest 呼叫 WorkerService.onApplicationShutdown 讓迴圈停止領新訊息並等進行中的完成
 app.enableShutdownHooks();
-await new Promise<never>(() => {});
+await app.get(WorkerService).run();
+await app.close();

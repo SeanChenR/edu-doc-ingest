@@ -5,11 +5,13 @@
 #（預設讀 .env 的 SEED_API_KEY_ALPHA / SEED_API_KEY_BETA）
 set -euo pipefail
 
+# 指令列給的 API_URL 優先，.env 只補沒設定的
+PRESET_API="${API_URL:-}"
 if [[ -f .env ]]; then
   # shellcheck disable=SC1091
   set -a; source .env; set +a
 fi
-API_URL="${API_URL:-http://localhost:3000}"
+API_URL="${PRESET_API:-${API_URL:-http://localhost:3000}}"
 KEY_A="${API_KEY_ALPHA:-${SEED_API_KEY_ALPHA:?set API_KEY_ALPHA}}"
 KEY_B="${API_KEY_BETA:-${SEED_API_KEY_BETA:?set API_KEY_BETA}}"
 IDEM="demo-$(date +%s)"

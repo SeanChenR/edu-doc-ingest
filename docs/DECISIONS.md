@@ -163,6 +163,12 @@
 - **也考慮過**：API 直接把 `content_text` 寫進 `documents.extracted_text`、`storage_key` 改為可 null，worker 看 checkpoint 已有就跳過抽取。
 - **為什麼**：只有一條處理路徑。另一案讓 extracting 有兩種語意——「已抽取」跟「不需要抽取」共用同一個欄位——checkpoint 判斷變模糊，`[[FAIL_EXTRACT]]` 對純文字也會失效。它也違反 §4 與 D-21「原始內容不進資料庫，資料庫只放 metadata 與抽取後的文字」。維持 NOT NULL 就不用改表。正式環境貼上的文字同樣落 Cloud Storage 一份當原始來源，之後 reprocess 才有東西可重跑。
 
+### D-26 Chunk 切割：固定字元長度 + overlap，切點優先落在段落邊界
+
+- **決定**：`FixedWindowChunker` 以字元計，視窗 `CHUNK_SIZE`（預設 1000）、重疊 `CHUNK_OVERLAP`（預設 200），兩者為環境變數。每個視窗的切點從尾端往回找最近的 `\n\n`，找不到找 `\n`，再找不到找空白，都沒有就在視窗長度硬切。`token_count` 用估算：CJK 字元每個算 1、其他字元每 4 個算 1，只是資訊欄位。抽出的文字去頭尾空白後為空 → 0 個 chunk、`chunk_count = 0`、job 仍為 `ready`。
+- **也考慮過**：依 Markdown 標題／PDF 版面結構切；用 tokenizer 精確計算 token 並以 token 為單位切。
+- **為什麼**：embedding 目前是 mock（D-15），切法只影響「幾塊、多長」，不影響正確性，正式環境接真模型時只換 `ChunkerPort` 的實作。固定視窗最可預測、最好測（同一段文字永遠切出同樣的結果，重試時 upsert 才對得上 `chunk_index`）。段落優先只是避免把句子切成兩半，成本一個回頭掃描。精確 tokenizer 要多一個相依，在 mock 階段換不到任何東西。
+
 ## 待決
 
-- Chunk 切割策略與 overlap 大小（實作 worker 時定）。
+- （目前無）

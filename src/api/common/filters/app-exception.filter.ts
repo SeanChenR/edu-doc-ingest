@@ -1,6 +1,6 @@
 import { type ArgumentsHost, Catch, type ExceptionFilter, HttpException } from '@nestjs/common';
 import type { Response } from 'express';
-import { InjectPinoLogger, PinoLogger } from 'nestjs-pino';
+import { PinoLogger } from 'nestjs-pino';
 import { ZodValidationException } from 'nestjs-zod';
 import { ZodError } from 'zod';
 
@@ -28,7 +28,10 @@ const STATUS_TO_CODE: Record<number, HttpErrorCode> = {
 // 都在這裡轉成 { error: { code, message, request_id, details? } }。500 的細節只進 log。
 @Catch()
 export class AppExceptionFilter implements ExceptionFilter {
-  constructor(@InjectPinoLogger(AppExceptionFilter.name) private readonly log: PinoLogger) {}
+  constructor(private readonly log: PinoLogger) {
+    // 用 setContext 而不是 @InjectPinoLogger：後者的 token 靠 LoggerModule 建立時的掃描順序決定，太脆弱
+    this.log.setContext(AppExceptionFilter.name);
+  }
 
   catch(exception: unknown, host: ArgumentsHost): void {
     const res = host.switchToHttp().getResponse<Response>();
