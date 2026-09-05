@@ -1,14 +1,12 @@
 import 'reflect-metadata';
-import { NestFactory } from '@nestjs/core';
+// 與 src/api/main.ts 相同的理由：先讓 @nestjs/common 評估完成，再動態載入其餘模組。
+import '@nestjs/common';
 
-import { WorkerModule } from '@/worker/worker.module';
+const { NestFactory } = await import('@nestjs/core');
+const { WorkerModule } = await import('@/worker/worker.module');
 
-async function bootstrap(): Promise<void> {
-  const app = await NestFactory.createApplicationContext(WorkerModule);
-  // SIGTERM / SIGINT are handled by Nest: it runs onApplicationShutdown hooks, closes the
-  // context and exits the process. Nothing else keeps the loop busy until the poll loop (slice 3).
-  app.enableShutdownHooks();
-  await new Promise<never>(() => {});
-}
-
-await bootstrap();
+const app = await NestFactory.createApplicationContext(WorkerModule);
+// SIGTERM / SIGINT 由 Nest 處理：跑 onApplicationShutdown、關閉 context、結束 process。
+// 在 poll loop（slice 3）進來之前，沒有其他東西讓 event loop 忙碌。
+app.enableShutdownHooks();
+await new Promise<never>(() => {});
