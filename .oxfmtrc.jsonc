@@ -1,0 +1,9 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "singleQuote": true,
+  "printWidth": 100,
+  "trailingComma": "all",
+  "sortImports": true,
+  // docs are hand-written Chinese prose; migrations are vendored / plain SQL
+  "ignorePatterns": ["docs/**", "*.md", "migrations/**", "storage/**", ".claude/**"],
+}
