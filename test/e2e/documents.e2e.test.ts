@@ -64,12 +64,11 @@ describe('POST /v1/workspaces/:workspaceId/documents', () => {
     expect(res.body.request_id).toMatch(/^req_/);
     expect(res.headers['x-request-id']).toBe(res.body.request_id);
 
-    const { docs, jobs, msgs } = await adminQuery(async (sql) => {
-      const docs = await sql`select * from documents`;
-      const jobs = await sql`select * from jobs`;
-      const msgs = await sql`select message from pgmq.q_document_jobs`;
-      return { docs, jobs, msgs };
-    });
+    const { docs, jobs, msgs } = await adminQuery(async (sql) => ({
+      docs: await sql`select * from documents`,
+      jobs: await sql`select * from jobs`,
+      msgs: await sql`select message from pgmq.q_document_jobs`,
+    }));
     expect(docs).toHaveLength(1);
     expect(docs[0].status).toBe('pending');
     expect(docs[0].storage_key).toBe(`ws_alpha/inline/${res.body.document_id}.txt`);
