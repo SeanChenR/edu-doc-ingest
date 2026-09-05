@@ -16,7 +16,9 @@ export const CreateDocumentSchema = z.object({
     .optional()
     // 以 UTF-8 位元組計（§6.4「序列化後 ≤ 4 KB」），不是字元數：CJK 一個字元佔 3 bytes
     .refine(
-      (m) => m === undefined || Buffer.byteLength(JSON.stringify(m), 'utf8') <= METADATA_MAX_BYTES,
+      (m) =>
+        m === undefined ||
+        new TextEncoder().encode(JSON.stringify(m)).byteLength <= METADATA_MAX_BYTES,
       {
         message: `must be <= ${METADATA_MAX_BYTES} bytes when serialized`,
       },
