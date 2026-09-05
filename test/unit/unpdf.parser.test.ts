@@ -26,11 +26,10 @@ describe('UnpdfParser (D-15, §6.4)', () => {
   });
 
   test('rejects bytes without the %PDF- header as EXTRACTION_FAILED', async () => {
-    const err = await failure(
+    const code = await failureCode(
       parser.parse(new TextEncoder().encode('not a pdf'), 'application/pdf'),
     );
-    expect(err).toBeInstanceOf(WorkerError);
-    expect((err as WorkerError).code).toBe(ErrorCode.EXTRACTION_FAILED);
+    expect(code).toBe(ErrorCode.EXTRACTION_FAILED);
   });
 
   test('decodes text/plain and text/markdown as UTF-8; invalid UTF-8 fails', async () => {
