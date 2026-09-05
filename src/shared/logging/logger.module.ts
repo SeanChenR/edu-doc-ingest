@@ -1,5 +1,5 @@
 import { LoggerModule as PinoLoggerModule } from 'nestjs-pino';
-import type { DestinationStream } from 'pino';
+import pino, { type DestinationStream } from 'pino';
 
 import { ENV } from '@/shared/config/config.module';
 import type { Env } from '@/shared/config/env';
@@ -51,6 +51,13 @@ export const LoggerModule = PinoLoggerModule.forRootAsync({
       autoLogging: { ignore: (req: { url?: string }) => HEALTH_PATHS.has(req.url ?? '') },
       redact: { paths: REDACT_PATHS, censor: '[Redacted]' },
     };
-    return { pinoHttp: env.LOG_PRETTY ? [options, await prettyStream()] : options };
+    // 輸出目的地優先序：LOG_FILE（檔案，同步）→ LOG_PRETTY（可讀格式）→ 預設 stdout JSON
+    const stream: DestinationStream | undefined =
+      env.LOG_FILE !== undefined
+        ? pino.destination({ dest: env.LOG_FILE, sync: true, mkdir: true })
+        : env.LOG_PRETTY
+          ? await prettyStream()
+          : undefined;
+    return { pinoHttp: stream === undefined ? options : [options, stream] };
   },
 });
