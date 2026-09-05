@@ -24,6 +24,9 @@ export const envSchema = z.object({
 
   STORAGE_ROOT: z.string().default('./storage'),
   EMBEDDING_DIMENSIONS: z.coerce.number().int().positive().default(1536),
+  // D-26 chunk 視窗與重疊（字元）
+  CHUNK_SIZE: z.coerce.number().int().min(50).default(1000),
+  CHUNK_OVERLAP: z.coerce.number().int().nonnegative().default(200),
   STAGE_DELAY_MS: z.coerce.number().int().nonnegative().default(800),
   FAILURE_INJECTION: bool,
 
@@ -31,6 +34,8 @@ export const envSchema = z.object({
   WORKER_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(500),
   WORKER_VISIBILITY_TIMEOUT_SEC: z.coerce.number().int().positive().default(60),
   WORKER_MAX_ATTEMPTS: z.coerce.number().int().positive().default(3),
+  // worker 主迴圈每輪 touch 一次，給容器 healthcheck 看 mtime 用
+  WORKER_HEARTBEAT_FILE: z.string().default('./storage/.worker-heartbeat'),
 
   SSE_PING_INTERVAL_MS: z.coerce.number().int().positive().default(15_000),
 });
