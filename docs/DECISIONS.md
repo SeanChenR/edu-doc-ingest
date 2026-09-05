@@ -146,6 +146,10 @@
 - **也考慮過**：本機 `make install` 成擴充套件、容器用 `ghcr.io/pgmq/pg18-pgmq`（D-20 與 DESIGN §1 原案）；自建 Dockerfile 在 pgvector 映像上疊 pgmq。
 - **為什麼**：2026-09-05 實測 Homebrew PostgreSQL 18 沒有 pgmq，`pgvector/pgvector` 官方映像也沒有，原案要在兩個環境各做一次不同的安裝，還得自建映像。pgmq 本來就是純 SQL 函式，灌 SQL 檔跟 `CREATE EXTENSION` 得到的東西一模一樣，只差 `pg_extension` 那筆登記；一條路走本機、容器、CI 三邊，正式環境 Cloud SQL 不支援擴充套件時也不用改。代價是升級 pgmq 要手動換檔，這個規模可以接受。密碼不進 SQL 檔是因為 migration 會進版控。
 
-## 待決
+### D-24 回應格式：成功回應攤平、失敗回應包 `error`，不用統一信封
+
+- **決定**：維持 DESIGN §6.1 / §6.2。成功時資源欄位直接放在最上層、末尾附 `request_id`；失敗時整個 body 只有 `{ "error": { code, message, request_id, details? } }`。兩者共同的不變式：`request_id` 永遠存在；`error` 這個 key 只在失敗時出現；成敗以 HTTP 狀態碼判斷。`ResponseInterceptor` 負責前者、`AppExceptionFilter` 負責後者，兩者都在第 2 步（§14）實作，任何端點都不得繞過。
+- **也考慮過**：統一信封 `{ "success": bool, "data": …, "error": …, "request_id": … }`，成功與失敗形狀完全相同。
+- **為什麼**：`success` 與 HTTP 狀態碼是同一件事講兩次，呼叫端本來就得看狀態碼；統一信封讓每個 GET 多一層 `data`，Swagger 的 schema 也得多包一層才對得上。攤平的成功回應就是資源本身，文件與型別一對一。失敗包在 `error` 底下是為了讓呼叫端用一個固定路徑取 `code` 決定要重試、修輸入還是放棄。這是 Stripe、GitHub 等公開 API 的慣例，對接的人不用學新規則。
 
 - Chunk 切割策略與 overlap 大小（實作 worker 時定）。
