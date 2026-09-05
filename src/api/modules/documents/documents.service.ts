@@ -4,6 +4,10 @@ import { PinoLogger } from 'nestjs-pino';
 import type { WorkspaceContext } from '@/api/common/auth/workspace-context';
 import type { CreateDocumentDto } from '@/api/modules/documents/documents.dto';
 import {
+  type DocumentResponse,
+  toDocumentResponse,
+} from '@/api/modules/documents/documents.query.dto';
+import {
   IdempotencyService,
   type ReplayableResponse,
 } from '@/api/modules/idempotency/idempotency.service';
@@ -16,6 +20,7 @@ import { JobsRepository } from '@/shared/db/repositories/jobs.repository';
 import { AppError } from '@/shared/errors/app-error';
 import { ErrorCode } from '@/shared/errors/codes';
 import { newId } from '@/shared/ids';
+import { EMBEDDING, type EmbeddingPort } from '@/shared/ports/embedding.port';
 import { QUEUE, type QueuePort } from '@/shared/ports/queue.port';
 import { STORAGE, type StoragePort } from '@/shared/ports/storage.port';
 import { isValidStorageKey } from '@/shared/storage-key';
@@ -47,6 +52,7 @@ export class DocumentsService {
     @Inject(DB) private readonly db: Db,
     @Inject(STORAGE) private readonly storage: StoragePort,
     @Inject(QUEUE) private readonly queue: QueuePort,
+    @Inject(EMBEDDING) private readonly embedding: EmbeddingPort,
     private readonly documents: DocumentsRepository,
     private readonly jobs: JobsRepository,
     private readonly idempotency: IdempotencyService,
@@ -127,6 +133,23 @@ export class DocumentsService {
       if (wroteFile) await this.cleanupFile(storageKey);
       throw err;
     }
+  }
+
+  // docs/DESIGN.md §5.3 GET：metadata + 最新 job 摘要 + 處理結果摘要。軟刪除視為不存在。
+  async getDocument(ws: WorkspaceContext, documentId: string): Promise<DocumentResponse> {
+    const wsId = ws.workspaceId;
+    const found = await withTenant(this.db, wsId, async (tx) => {
+      const doc = await this.documents.findById(wsId, tx, documentId);
+      if (doc === null || doc.deleted_at !== null) return null;
+      const job =
+        doc.latest_job_id === null ? null : await this.jobs.findById(wsId, tx, doc.latest_job_id);
+      return { doc, job };
+    });
+    if (found === null) throw new AppError(ErrorCode.NOT_FOUND);
+    return toDocumentResponse(found.doc, found.job, {
+      modelName: this.embedding.modelName,
+      dimensions: this.embedding.dimensions,
+    });
   }
 
   // §6.4 的輸入限制，每條對應 §6.3 的專屬錯誤碼。
