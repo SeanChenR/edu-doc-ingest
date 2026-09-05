@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, type OnApplicationShutdown } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { PinoLogger } from 'nestjs-pino';
 
@@ -17,7 +17,10 @@ const TERMINAL_EVENT = new Set(['completed', 'failed']);
 // docs/DESIGN.md §5.4、D-05：手寫串流。順序固定 snapshot → 補發（只在帶 Last-Event-ID 時，id > 它）→ 即時；
 // 每 SSE_PING_INTERVAL_MS 送一行 `: ping`；送出終止事件後主動關閉；連線時已終止則 snapshot（+ 終止事件）後關閉。
 @Injectable()
-export class SseService {
+export class SseService implements OnApplicationShutdown {
+  // 目前開著的串流的關閉函式；shutdown 時全部關掉，滾動部署不用等連線自然斷
+  private readonly open = new Set<() => void>();
+
   constructor(
     @Inject(ENV) private readonly env: Env,
     @Inject(DB) private readonly db: Db,
@@ -56,8 +59,10 @@ export class SseService {
       closed = true;
       clearInterval(ping);
       unsubscribe();
+      this.open.delete(close);
       res.end();
     };
+    this.open.add(close);
 
     // 只送 id 比上一則大的事件：補發與即時之間靠 id 去重
     const send = (row: JobEventRow): void => {
@@ -97,6 +102,11 @@ export class SseService {
 
     // 連線時已終止且終止事件已在 Last-Event-ID 之前 → 沒東西可等，直接關
     if (TERMINAL_STATUS.has(job.status)) close();
+  }
+
+  onApplicationShutdown(): void {
+    // close() 會把自己從 Set 移除；JS 的 Set 迭代允許邊走邊刪
+    for (const close of this.open) close();
   }
 }
 
