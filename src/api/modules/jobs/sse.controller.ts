@@ -59,7 +59,10 @@ export class SseController {
     // 租戶不符 → 一般 404 JSON（由 filter 產生），不會建立串流
     const job = await this.jobs.getJob(ws, jobId);
     const lastEventId =
-      lastEventIdHeader !== undefined && /^\d+$/.test(lastEventIdHeader) ? lastEventIdHeader : null;
+      // 最多 18 位數：超過 bigint 範圍的值當作沒帶，不讓它變成 SQL 轉型錯誤
+      lastEventIdHeader !== undefined && /^\d{1,18}$/.test(lastEventIdHeader)
+        ? lastEventIdHeader
+        : null;
     await this.sse.stream(job, lastEventId, req, res);
   }
 }
