@@ -35,9 +35,14 @@ export async function createApp(): Promise<INestApplication> {
     .setVersion('v1')
     .addBearerAuth()
     .build();
-  SwaggerModule.setup('docs', app, () => cleanupOpenApiDoc(SwaggerModule.createDocument(app, swagger)), {
-    jsonDocumentUrl: 'docs-json',
-  });
+  SwaggerModule.setup(
+    'docs',
+    app,
+    () => cleanupOpenApiDoc(SwaggerModule.createDocument(app, swagger)),
+    {
+      jsonDocumentUrl: 'docs-json',
+    },
+  );
 
   return app;
 }

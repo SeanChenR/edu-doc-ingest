@@ -20,6 +20,6 @@ export class DocumentsRepository {
     await tx`
       insert into documents (id, workspace_id, name, mime_type, size_bytes, storage_key, status, latest_job_id, metadata)
       values (${doc.id}, ${workspaceId}, ${doc.name}, ${doc.mime_type}, ${doc.size_bytes}, ${doc.storage_key},
-              'pending', ${doc.latest_job_id}, ${doc.metadata === null ? null : JSON.stringify(doc.metadata)}::jsonb)`;
+              'pending', ${doc.latest_job_id}, ${doc.metadata})`;
   }
 }

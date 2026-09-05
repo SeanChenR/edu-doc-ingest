@@ -3,7 +3,10 @@ import { InjectPinoLogger, PinoLogger } from 'nestjs-pino';
 
 import type { WorkspaceContext } from '@/api/common/auth/workspace-context';
 import type { CreateDocumentDto } from '@/api/modules/documents/documents.dto';
-import { IdempotencyService, type ReplayableResponse } from '@/api/modules/idempotency/idempotency.service';
+import {
+  IdempotencyService,
+  type ReplayableResponse,
+} from '@/api/modules/idempotency/idempotency.service';
 import { ENV } from '@/shared/config/config.module';
 import type { Env } from '@/shared/config/env';
 import { type Db, withTenant } from '@/shared/db/client';
@@ -63,7 +66,8 @@ export class DocumentsService {
     // D-25 步驟 1：交易外先查，重播不寫第二個檔。response_body 為 null 代表另一個請求進行中，
     // 交給步驟 3 的主鍵鎖去等它。
     const existing = await withTenant(this.db, wsId, (tx) => this.idempotency.find(wsId, tx, key));
-    if (existing?.response_body) return { ...this.idempotency.replay(existing, hash), replayed: true };
+    if (existing?.response_body)
+      return { ...this.idempotency.replay(existing, hash), replayed: true };
 
     const documentId = newId('doc');
     const jobId = newId('job');
@@ -73,7 +77,8 @@ export class DocumentsService {
         : input.source.key;
 
     // D-25 步驟 2
-    if (input.source.kind === 'inline') await this.storage.put(storageKey, input.source.bytes, input.mimeType);
+    if (input.source.kind === 'inline')
+      await this.storage.put(storageKey, input.source.bytes, input.mimeType);
     const wroteFile = input.source.kind === 'inline';
 
     try {
@@ -174,7 +179,8 @@ export class DocumentsService {
     }
 
     const storageKey = dto.storage_key ?? '';
-    if (!isValidStorageKey(storageKey, workspaceId)) throw new AppError(ErrorCode.INVALID_STORAGE_KEY);
+    if (!isValidStorageKey(storageKey, workspaceId))
+      throw new AppError(ErrorCode.INVALID_STORAGE_KEY);
     return { ...base, source: { kind: 'storage', key: storageKey } };
   }
 

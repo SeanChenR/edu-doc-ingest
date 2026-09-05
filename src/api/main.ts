@@ -1,5 +1,4 @@
 import 'reflect-metadata';
-
 import { Logger } from 'nestjs-pino';
 
 import { createApp } from '@/api/app';

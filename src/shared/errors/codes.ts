@@ -52,7 +52,8 @@ export const DEFAULT_MESSAGE: Record<HttpErrorCode, string> = {
   [ErrorCode.INVALID_STORAGE_KEY]: 'storage_key is not valid for this workspace.',
   [ErrorCode.UNAUTHORIZED]: 'Missing or invalid API key.',
   [ErrorCode.NOT_FOUND]: 'Resource not found.',
-  [ErrorCode.IDEMPOTENCY_KEY_REUSED]: 'Idempotency-Key was already used with a different request body.',
+  [ErrorCode.IDEMPOTENCY_KEY_REUSED]:
+    'Idempotency-Key was already used with a different request body.',
   [ErrorCode.DOCUMENT_TOO_LARGE]: 'Document exceeds the allowed size.',
   [ErrorCode.UNSUPPORTED_MEDIA_TYPE]: 'mime_type is not supported.',
   [ErrorCode.SIZE_MISMATCH]: 'Declared size_bytes does not match the content length.',

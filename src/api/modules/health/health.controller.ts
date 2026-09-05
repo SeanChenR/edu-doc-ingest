@@ -32,7 +32,12 @@ export class HealthController {
       const rows = await this.db`select 1 from pgmq.meta where queue_name = ${QUEUE_NAME}`;
       if (rows.length === 0) throw new Error(`queue ${QUEUE_NAME} missing`);
     } catch (err) {
-      throw new AppError(ErrorCode.NOT_READY, undefined, undefined, `Not ready: ${errorMessage(err)}`);
+      throw new AppError(
+        ErrorCode.NOT_READY,
+        undefined,
+        undefined,
+        `Not ready: ${errorMessage(err)}`,
+      );
     }
     return { status: 'ok' };
   }

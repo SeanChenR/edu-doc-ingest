@@ -1,4 +1,9 @@
-import { type CallHandler, type ExecutionContext, Injectable, type NestInterceptor } from '@nestjs/common';
+import {
+  type CallHandler,
+  type ExecutionContext,
+  Injectable,
+  type NestInterceptor,
+} from '@nestjs/common';
 import { map, type Observable } from 'rxjs';
 
 import { currentRequestId } from '@/api/common/request-id/request-context';
@@ -10,7 +15,9 @@ export class ResponseInterceptor implements NestInterceptor {
   intercept(_context: ExecutionContext, next: CallHandler): Observable<unknown> {
     return next
       .handle()
-      .pipe(map((body) => (isPlainObject(body) ? { ...body, request_id: currentRequestId() } : body)));
+      .pipe(
+        map((body) => (isPlainObject(body) ? { ...body, request_id: currentRequestId() } : body)),
+      );
   }
 }
 

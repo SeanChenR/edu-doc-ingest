@@ -26,7 +26,8 @@ export class IdempotencyService {
   ) {}
 
   requireKey(header: string | undefined): string {
-    if (header === undefined || header === '') throw new AppError(ErrorCode.IDEMPOTENCY_KEY_REQUIRED);
+    if (header === undefined || header === '')
+      throw new AppError(ErrorCode.IDEMPOTENCY_KEY_REQUIRED);
     if (!KEY_RE.test(header)) {
       throw new AppError(ErrorCode.VALIDATION_ERROR, undefined, [
         { field: 'Idempotency-Key', issue: 'must be 1-128 printable ASCII characters' },

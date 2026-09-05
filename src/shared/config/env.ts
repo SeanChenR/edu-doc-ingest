@@ -11,7 +11,7 @@ export const envSchema = z.object({
   DATABASE_URL: z.url(),
   DATABASE_URL_WORKER: z.url(),
   DB_CONNECT_RETRY_SEC: z.coerce.number().int().positive().default(30),
-  LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
+  LOG_LEVEL: z.enum(['silent', 'fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 
   MAX_DOCUMENT_BYTES: z.coerce.number().int().positive().default(10_485_760),
   ALLOWED_MIME_TYPES: z

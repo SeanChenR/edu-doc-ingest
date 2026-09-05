@@ -21,7 +21,12 @@ export const DB = Symbol('DB');
 type DbUrlKey = 'DATABASE_URL' | 'DATABASE_URL_WORKER';
 
 // SQL 只存在於 repositories（§1.3）；由 DbModule 一併提供，兩個映像都能注入。
-const REPOSITORIES = [ApiKeysRepository, DocumentsRepository, JobsRepository, IdempotencyKeysRepository];
+const REPOSITORIES = [
+  ApiKeysRepository,
+  DocumentsRepository,
+  JobsRepository,
+  IdempotencyKeysRepository,
+];
 
 @Injectable()
 class DbShutdown implements OnApplicationShutdown {

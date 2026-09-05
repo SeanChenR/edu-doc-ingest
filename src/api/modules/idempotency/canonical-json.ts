@@ -11,7 +11,7 @@ export function requestHash(body: unknown): string {
 function sortKeys(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sortKeys);
   if (typeof value === 'object' && value !== null) {
-    const entries = Object.entries(value as Record<string, unknown>)
+    const entries = Object.entries(value)
       .filter(([, v]) => v !== undefined)
       .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
     return Object.fromEntries(entries.map(([k, v]) => [k, sortKeys(v)]));

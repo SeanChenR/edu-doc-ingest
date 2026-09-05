@@ -39,7 +39,7 @@ export class IdempotencyKeysRepository {
   ): Promise<void> {
     await tx`
       update idempotency_keys
-      set response_status = ${responseStatus}, response_body = ${JSON.stringify(responseBody)}::jsonb
+      set response_status = ${responseStatus}, response_body = ${responseBody}
       where workspace_id = ${workspaceId} and key = ${key}`;
   }
 }

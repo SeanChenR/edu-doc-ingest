@@ -35,7 +35,8 @@ export class AppExceptionFilter implements ExceptionFilter {
     const requestId = currentRequestId() ?? String(res.getHeader('X-Request-Id') ?? '');
     const t = translate(exception);
 
-    if (t.status >= 500) this.log.error({ err: exception, request_id: requestId }, 'unhandled error');
+    if (t.status >= 500)
+      this.log.error({ err: exception, request_id: requestId }, 'unhandled error');
 
     res.status(t.status).json({
       error: {
@@ -58,7 +59,10 @@ function translate(e: unknown): Translated {
       status: 400,
       code: ErrorCode.VALIDATION_ERROR,
       message: DEFAULT_MESSAGE[ErrorCode.VALIDATION_ERROR],
-      details: issues.map((i) => ({ field: i.path.map(String).join('.') || '(body)', issue: i.message })),
+      details: issues.map((i) => ({
+        field: i.path.map(String).join('.') || '(body)',
+        issue: i.message,
+      })),
     };
   }
   if (e instanceof HttpException) return fromStatus(e.getStatus());
@@ -77,7 +81,10 @@ function translate(e: unknown): Translated {
 }
 
 function fromStatus(status: number): Translated {
-  const code = status >= 500 ? ErrorCode.INTERNAL_ERROR : (STATUS_TO_CODE[status] ?? ErrorCode.VALIDATION_ERROR);
+  const code =
+    status >= 500
+      ? ErrorCode.INTERNAL_ERROR
+      : (STATUS_TO_CODE[status] ?? ErrorCode.VALIDATION_ERROR);
   const finalStatus = code === ErrorCode.INTERNAL_ERROR ? 500 : status;
   return { status: finalStatus, code, message: DEFAULT_MESSAGE[code] };
 }

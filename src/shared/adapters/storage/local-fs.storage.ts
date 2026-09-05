@@ -1,6 +1,7 @@
-import { Inject, Injectable } from '@nestjs/common';
 // Bun 沒有原生的路徑正規化 API，這裡只能用 node:path。
 import { resolve, sep } from 'node:path';
+
+import { Inject, Injectable } from '@nestjs/common';
 
 import { ENV } from '@/shared/config/config.module';
 import type { Env } from '@/shared/config/env';
@@ -25,7 +26,7 @@ export class LocalFsStorage implements StoragePort {
     return Bun.file(this.pathOf(key)).bytes();
   }
 
-  exists(key: string): Promise<boolean> {
+  async exists(key: string): Promise<boolean> {
     return Bun.file(this.pathOf(key)).exists();
   }
 
