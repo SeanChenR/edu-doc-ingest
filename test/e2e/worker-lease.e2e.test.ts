@@ -90,6 +90,30 @@ describe('visibility lease (audit run-2 MEDIUM-1)', () => {
   }, 15_000);
 });
 
+describe('slot refill in run() (audit run-2 LOW-1, throughput)', () => {
+  test('a finished slot picks the next message while a slow job is still running', async () => {
+    // A：[[SLOW]] 每階段 3 秒 → 約 6 秒；B、C：每階段 1.5 秒 → 約 3 秒
+    const a = await create('slow one');
+    await adminQuery(
+      (sql) => sql`update documents set name = '[[SLOW]].txt' where id = ${a.document_id}`,
+    );
+    const b = await create('fast one');
+
+    const loop = leaseWorker.run();
+    try {
+      await Bun.sleep(3500);
+      expect((await job(b.job_id)).status).toBe('ready');
+      const c = await create('third one'); // 此時 A 還在跑，空出來的 slot 應該馬上領 C
+      await Bun.sleep(4000); // t ≈ 7.5 s：舊迴圈要等 A（6 s）結束才領 C，C 會在 9 s 才 ready
+      expect((await job(c.job_id)).status).toBe('ready');
+      expect((await job(a.job_id)).status).toBe('ready');
+    } finally {
+      await leaseWorker.onApplicationShutdown('test');
+      await loop;
+    }
+  }, 20_000);
+});
+
 describe('attempt timeout (audit run-2 LOW-1)', () => {
   test('an attempt over JOB_TIMEOUT_MS is retried with a sanitized error; the abandoned run writes nothing more', async () => {
     const { job_id } = await create('takes too long');
