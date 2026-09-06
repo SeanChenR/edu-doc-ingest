@@ -161,7 +161,7 @@ Swagger UI：http://localhost:3000/docs ，OpenAPI JSON：`/docs-json`。所有�
 
 下面四段各對應一個端點，每段都是「curl → 實際回應」。`<job_id>`、`<document_id>` 換成第一步回來的值。
 
-### 4.1 建立文件 `POST /v1/workspaces/:workspaceId/documents`
+### 5.1 建立文件 `POST /v1/workspaces/:workspaceId/documents`
 
 Body 欄位：`name`、`mime_type`（`application/pdf` / `text/plain` / `text/markdown`）、`size_bytes`、內容二擇一 `content_text`（直接貼文字）或 `storage_key`（`./storage/` 下已存在的檔案，第一段必須是自己的 workspace），`metadata`（可選，序列化 ≤ 4 KB）。
 
@@ -183,7 +183,7 @@ curl -s -X POST http://localhost:3000/v1/workspaces/ws_alpha/documents \
 -d '{"name":"unit-3-fractions.pdf","mime_type":"application/pdf","size_bytes":877,"storage_key":"ws_alpha/samples/unit-3-fractions.pdf"}'
 ```
 
-### 4.2 查 job `GET /v1/jobs/:jobId`
+### 5.2 查 job `GET /v1/jobs/:jobId`
 
 ```bash
 curl -s -H 'Authorization: Bearer dk_alpha_local_only' http://localhost:3000/v1/jobs/<job_id>
@@ -202,7 +202,7 @@ curl -s -H 'Authorization: Bearer dk_alpha_local_only' http://localhost:3000/v1/
 
 `status` 是 `queued → extracting → embedding → ready | failed`；`retries_used = attempt − 1`；失敗時 `last_error` 是 `{ "code": "EMBEDDING_PROVIDER_ERROR", "message": "…" }`，訊息已去除堆疊、路徑與金鑰樣式字串。
 
-### 4.3 SSE 進度 `GET /v1/jobs/:jobId/events`
+### 5.3 SSE 進度 `GET /v1/jobs/:jobId/events`
 
 ```bash
 curl -N -H 'Authorization: Bearer dk_alpha_local_only' http://localhost:3000/v1/jobs/<job_id>/events
@@ -241,7 +241,7 @@ data: {"job_id":"job_01K4…","stage":null,"progress":100,"attempt":1,"chunk_cou
 - 收到 `completed` 或 `failed` 後伺服器主動關閉；每 15 秒一行 `: ping` 保活。
 - job 不存在或屬於別的 workspace：回一般的 `404` JSON，不會開串流。
 
-### 4.4 查文件 `GET /v1/documents/:documentId`
+### 5.4 查文件 `GET /v1/documents/:documentId`
 
 ```bash
 curl -s -H 'Authorization: Bearer dk_alpha_local_only' http://localhost:3000/v1/documents/<document_id>
@@ -261,7 +261,7 @@ curl -s -H 'Authorization: Bearer dk_alpha_local_only' http://localhost:3000/v1/
 
 `result` 只在 `status = ready` 時有值（`text_preview` 最多 500 字）；`status` 是 `pending → processing → ready | failed`。
 
-### 4.5 錯誤格式
+### 5.5 錯誤格式
 
 錯誤一律是 `{ "error": { "code", "message", "request_id", "details?" } }`，`code` 見 `docs/DESIGN.md` §6.3：
 
@@ -291,7 +291,7 @@ curl -s -H 'Authorization: Bearer dk_alpha_local_only' http://localhost:3000/v1/
 
 三種方式互補：`bun test` 是自動化基準；`scripts/*.sh` 是能對著跑中的服務重現主流程的腳本；Postman 給不想看 shell 的人。
 
-### 5.1 `bun test`：83 個測試
+### 6.1 `bun test`：83 個測試
 
 前置：`.env` 的 `DATABASE_URL_ADMIN` 指向一個跑過 `bun run migrate && bun run seed` 的 DB。每個測試前 `truncate` 五張租戶表並清空 pgmq 佇列，所以測試之間互不干擾；worker 不跑背景迴圈，測試自己呼叫 `pollOnce()` 決定何時處理。
 
@@ -324,7 +324,7 @@ curl -s -H 'Authorization: Bearer dk_alpha_local_only' http://localhost:3000/v1/
 
 想看 log：`TEST_LOG_LEVEL=info bun test`。
 
-### 5.2 腳本（`scripts/`）
+### 6.2 腳本（`scripts/`）
 
 | 腳本 | 對誰跑 | 做什麼 |
 |---|---|---|
@@ -337,7 +337,7 @@ curl -s -H 'Authorization: Bearer dk_alpha_local_only' http://localhost:3000/v1/
 API_URL=http://localhost:3000 API_KEY_ALPHA=... ./scripts/curl-demo.sh
 ```
 
-### 5.3 Postman
+### 6.3 Postman
 
 匯入 `postman/doc-ingest.postman_collection.json` 與 `postman/doc-ingest.postman_environment.json`，選 environment「doc-ingest local」（`base_url`、`api_key_alpha`、`api_key_beta`），用 **Collection Runner 由上往下跑一次**（或 `bunx newman run postman/doc-ingest.postman_collection.json -e postman/doc-ingest.postman_environment.json`）。共 21 個請求（輪詢會重複執行，實際約 30 次）、90 個斷言，全部通過代表主流程、冪等、租戶隔離、驗證與重試都正常。
 
@@ -345,12 +345,12 @@ API_URL=http://localhost:3000 API_KEY_ALPHA=... ./scripts/curl-demo.sh
 |---|---|---|
 | 0 Health | `GET /health`、`GET /ready` | 200、`status: ok` |
 | 1 Create document | POST（pre-request 產生唯一 `idem_key`）→ 同 key 同 body → 同 key 不同 body | 202 且 id 前綴正確、第一次沒有 `Idempotent-Replayed`；重送 id 相同且 `Idempotent-Replayed: true`；409 `IDEMPOTENCY_KEY_REUSED` |
-| 2 Query | `GET job`（worker 沒做完就 `setNextRequest` 自己再打，最多 30 次）→ `GET document` | job 有 §5.4 全部欄位、`retries_used = attempt − 1`；document `ready`、`metadata` 原樣、`result.text_preview = hello world`、`embedding_model = mock-1536` |
+| 2 Query | `GET job`（worker 沒做完就 `setNextRequest` 自己再打，最多 30 次）→ `GET document` | job 有 DESIGN §5.4 全部欄位、`retries_used = attempt − 1`；document `ready`、`metadata` 原樣、`result.text_preview = hello world`、`embedding_model = mock-1536` |
 | 3 Tenant isolation | beta key 讀 alpha 的 document / job、讀不存在的 id、beta key POST 到 alpha 路徑 | 全部 404 `NOT_FOUND`；跨租戶與不存在的 body 去掉 `request_id` 後**完全相同** |
 | 4 Validation errors | 缺 `name`、缺 `Idempotency-Key`、兩個內容來源、錯 MIME、超大、size 差 > 5 %、`..` storage_key、沒 key | 400 / 400 / 400 / 415 / 413 / 422 / 400 / 401，各自的 `error.code`；缺欄位時 `details[0].field = name` |
 | 5 Retry exhaustion | POST `[[FAIL_EMBED]]` → `GET job`（輪詢直到終止） | `failed`、`attempt = 3`、`retries_used = 2`、`last_error.code = EMBEDDING_PROVIDER_ERROR`，訊息不含堆疊 |
 
-Collection 層級的 test script 對**每個**回應檢查 `X-Request-Id` 標頭存在且與 body 的 `request_id` 相同（§5.1）。變數 `document_id`、`job_id`、`fail_job_id` 由前面的請求寫入，後面的請求直接用。
+Collection 層級的 test script 對**每個**回應檢查 `X-Request-Id` 標頭存在且與 body 的 `request_id` 相同（DESIGN §5.1）。變數 `document_id`、`job_id`、`fail_job_id` 由前面的請求寫入，後面的請求直接用。
 
 ## 7. 資料表
 
