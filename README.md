@@ -4,26 +4,7 @@
 
 設計規格是 `docs/DESIGN.md`，每個決定與理由在 `docs/DECISIONS.md`（D-01 ～ D-26）；本文只摘要。
 
-```
-┌──────────────┐    HTTP / SSE    ┌──────────────────┐
-│  Client      │ ───────────────▶ │  api (NestJS)    │
-│              │ ◀─────────────── │  image: api      │
-└──────────────┘                  └────────┬─────────┘
-                                           │ SQL / LISTEN
-                                           ▼
-                              ┌────────────────────────┐
-                              │  PostgreSQL 18         │
-                              │  + pgvector + pgmq     │
-                              └────────────┬───────────┘
-                                           │ SQL / NOTIFY
-                              ┌────────────▼───────────┐
-                              │  worker (NestJS)       │
-                              │  image: worker         │
-                              │  ├ ParserPort (unpdf)  │
-                              │  ├ EmbeddingPort (mock)│
-                              │  └ StoragePort (local) │
-                              └────────────────────────┘
-```
+![doc-ingest 系統架構](docs/diagrams/architecture.png)
 
 三個容器：`api`、`worker`、`db`。api 與 worker 是同一個 repo、同一份 `Dockerfile` 的兩個 target，共用 `src/shared/`。api → worker 靠 pgmq（純 SQL 佇列，與業務寫入同交易）；worker → api 靠 PostgreSQL `LISTEN/NOTIFY`（通知只當叫醒鈴，內容以資料表為準）。
 
@@ -108,6 +89,10 @@ curl -s -H 'Authorization: Bearer dk_alpha_local_only' http://localhost:3000/v1/
 
 ## 4. 架構決策（摘要，完整版見 `docs/DECISIONS.md`）
 
+一份文件從 `POST` 到 `completed` 的完整路徑（每支箭頭都是一個交易；NOTIFY 只當叫醒鈴）：
+
+![一份文件的生命週期](docs/diagrams/document-lifecycle.png)
+
 - **CQRS 混合制**（§2.1）：`POST` 是命令路徑，所有 `GET` 直接查表，不套 handler 儀式。
 - **pgmq 與交易一致性**（D-03、D-12）：建立文件時 `documents`、`jobs`、`idempotency_keys`、`pgmq.send` 在**同一個交易**，不會有「job 建了但沒排隊」的孤兒。訊息只放 `{job_id, workspace_id}`，狀態永遠在 `jobs` 表。
 - **LISTEN/NOTIFY 只當叫醒鈴**（D-04）：worker 每次改狀態在同交易 `INSERT job_events` + `NOTIFY`；api 收到後回表讀那一列再推 SSE。NOTIFY 不保證送達與順序，所以內容以表為準。多台 api 都 LISTEN 同一頻道即可橫向擴展。
@@ -163,6 +148,7 @@ src/shared/     兩邊共用：config、errors、logging、db（client、rows、
 migrations/     001 擴充套件 + pgmq + 佇列；002 六張表、RLS、權限；pgmq/pgmq.sql 原樣內附
 scripts/        migrate、seed、dev、curl-demo、worker-demo、compose-demo
 test/e2e、test/unit、postman/
+docs/diagrams/  兩張圖的原始檔（.html，可用 diagram-design 重畫）、.svg、README 用的 .png
 ```
 
 環境變數全部在 `.env.example`，含說明；規格對照 `docs/DESIGN.md` §13。
