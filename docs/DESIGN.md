@@ -660,6 +660,7 @@ loop:
 ```
 
 - `POLL_INTERVAL_MS` 預設 500，`CONCURRENCY` 預設 2。
+- worker 處理期間每 `VISIBILITY_TIMEOUT / 2` 秒對訊息 `pgmq.set_vt` 續一次租約，所以只有 worker 真的死掉，訊息才會回到佇列被別人領走；單次 attempt 超過 `JOB_TIMEOUT_MS` 視為失敗走 §9.4 重試（pipeline 在每個狀態變更前檢查 abort 訊號）。
 - 收到 SIGTERM：停止領新訊息，等進行中的 job 完成（上限 30 秒）後退出；未完成的訊息會在 vt 到期後自動回到佇列。
 
 ### 9.2 `handle(msg)`
@@ -825,6 +826,7 @@ WORKER_CONCURRENCY=2
 WORKER_POLL_INTERVAL_MS=500
 WORKER_VISIBILITY_TIMEOUT_SEC=60
 WORKER_MAX_ATTEMPTS=3
+JOB_TIMEOUT_MS=300000             # 單次 attempt 上限；逾時視為失敗走重試，避免一份壞檔案占住 worker
 WORKER_HEARTBEAT_FILE=./storage/.worker-heartbeat   # 主迴圈每輪 touch，compose healthcheck 看 mtime
 
 SSE_PING_INTERVAL_MS=15000

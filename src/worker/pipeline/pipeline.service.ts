@@ -20,6 +20,8 @@ export interface JobContext {
   job: JobRow;
   document: DocumentRow;
   attempt: number;
+  // JOB_TIMEOUT_MS 到了會 abort；pipeline 在每個狀態變更前檢查，逾時的 attempt 不再寫任何東西
+  signal: AbortSignal;
 }
 
 // docs/DESIGN.md §9.3 三個階段的「做什麼」：讀檔、解析、切 chunk、算向量。
@@ -46,6 +48,7 @@ export class PipelineService {
     if (doc.extracted_text !== null) {
       // checkpoint：上一次 attempt 已抽取完成，不再讀檔、不再呼叫 parser（不可逆副作用不重複）
       this.log.info({ job_id: job.id, document_id: doc.id }, 'extraction checkpoint reused');
+      ctx.signal.throwIfAborted();
       await this.transitions.progress(job, attempt, {
         type: 'progress',
         stage: 'extracting',
@@ -84,6 +87,7 @@ export class PipelineService {
       );
     }
 
+    ctx.signal.throwIfAborted();
     await this.transitions.extracted(job, attempt, parsed.text, parsed.pageCount);
     this.log.info(
       {
@@ -101,6 +105,7 @@ export class PipelineService {
   async embed(ctx: JobContext, text: string): Promise<number> {
     const { job, document: doc, attempt } = ctx;
 
+    ctx.signal.throwIfAborted();
     await this.transitions.progress(job, attempt, {
       type: 'stage_changed',
       stage: 'embedding',
@@ -132,7 +137,9 @@ export class PipelineService {
 
     for (let i = 0; i < pending.length; i += EMBED_BATCH) {
       const batch = pending.slice(i, i + EMBED_BATCH);
+      ctx.signal.throwIfAborted();
       const vectors = await this.embedding.embed(batch.map((c) => c.content));
+      ctx.signal.throwIfAborted();
       const done = all.length - pending.length + i + batch.length;
       const progress =
         PROGRESS.embedding +
