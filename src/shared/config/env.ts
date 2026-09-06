@@ -36,6 +36,8 @@ export const envSchema = z.object({
   WORKER_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(500),
   WORKER_VISIBILITY_TIMEOUT_SEC: z.coerce.number().int().positive().default(60),
   WORKER_MAX_ATTEMPTS: z.coerce.number().int().positive().default(3),
+  // 單次 attempt 的時間上限；逾時視為該次失敗，走 §9.4 的重試
+  JOB_TIMEOUT_MS: z.coerce.number().int().positive().default(300_000),
   // worker 主迴圈每輪 touch 一次，給容器 healthcheck 看 mtime 用
   WORKER_HEARTBEAT_FILE: z.string().default('./storage/.worker-heartbeat'),
 

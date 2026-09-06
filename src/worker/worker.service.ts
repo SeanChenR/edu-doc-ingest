@@ -37,6 +37,8 @@ export class WorkerService implements OnApplicationShutdown {
   }
 
   // 由 main.ts 呼叫；收到 SIGTERM 後停止領新訊息，等進行中的完成再返回。
+  // slot 各自補位：有空位就領（最多領空位數那麼多則），領到就開跑不等同伴；
+  // 任一個 job 做完立刻回來領下一則，不會被同一批裡最慢的那個拖住。
   async run(): Promise<void> {
     this.log.info(
       {
@@ -46,14 +48,16 @@ export class WorkerService implements OnApplicationShutdown {
       'worker started',
     );
     while (!this.stopping) {
-      let handled = 0;
+      let picked = 0;
       try {
-        handled = await this.pollOnce();
+        picked = await this.fill();
       } catch (err) {
         this.log.error({ err }, 'poll failed');
       }
       await this.heartbeat();
-      if (handled === 0) await Bun.sleep(this.env.WORKER_POLL_INTERVAL_MS);
+      if (picked > 0) continue; // 佇列可能還有，馬上再領
+      // 沒領到：等「有 job 做完（空出 slot）」或「輪詢間隔到了」，先到先贏
+      await Promise.race([Bun.sleep(this.env.WORKER_POLL_INTERVAL_MS), ...this.inFlight]);
     }
     await Promise.allSettled(this.inFlight);
     this.log.info('worker stopped');
@@ -61,14 +65,17 @@ export class WorkerService implements OnApplicationShutdown {
 
   // 領一批並處理完；回傳處理的訊息數。測試直接呼叫這個，不跑 run()。
   async pollOnce(): Promise<number> {
-    const msgs = await this.queue.read(
-      this.db,
-      this.env.WORKER_CONCURRENCY,
-      this.env.WORKER_VISIBILITY_TIMEOUT_SEC,
-    );
-    if (msgs.length === 0) return 0;
-    const tasks = msgs.map((m) => this.track(this.handle(m)));
-    await Promise.all(tasks);
+    const picked = await this.fill();
+    await Promise.allSettled(this.inFlight);
+    return picked;
+  }
+
+  // 依目前空位數領訊息並開跑（不等待）；回傳領到幾則
+  private async fill(): Promise<number> {
+    const free = this.env.WORKER_CONCURRENCY - this.inFlight.size;
+    if (free <= 0) return 0;
+    const msgs = await this.queue.read(this.db, free, this.env.WORKER_VISIBILITY_TIMEOUT_SEC);
+    for (const m of msgs) void this.track(this.handle(m));
     return msgs.length;
   }
 
@@ -110,20 +117,65 @@ export class WorkerService implements OnApplicationShutdown {
       return;
     }
 
-    const ctx: JobContext = { job, document, attempt };
+    // 處理期間持續續租約：只有 worker 真的死掉，訊息才會回到佇列（避免長工作被第二個 worker 重複處理）
+    const lease = this.keepLease(msg.msgId);
+    // 單次 attempt 的時間上限：逾時就 abort，pipeline 在下一個狀態變更前停下，這次視為失敗走重試
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () =>
+        controller.abort(
+          new WorkerError(
+            ErrorCode.EXTRACTION_FAILED,
+            `Attempt timed out after ${this.env.JOB_TIMEOUT_MS} ms.`,
+          ),
+        ),
+      this.env.JOB_TIMEOUT_MS,
+    );
+    const ctx: JobContext = { job, document, attempt, signal: controller.signal };
+    try {
+      await Promise.race([this.process(msg, ctx), abortedPromise(controller.signal)]);
+    } catch (err) {
+      const { code, message } = classify(err);
+      this.log.warn({ job_id: jobId, attempt, code, err }, 'job attempt failed');
+      await this.failOrRetry(msg, job, attempt, code, message);
+    } finally {
+      clearTimeout(timeout);
+      clearInterval(lease);
+    }
+  }
+
+  private async process(msg: QueueMessage, ctx: JobContext): Promise<void> {
+    const { job, document, attempt } = ctx;
     try {
       const text = await this.pipeline.extract(ctx);
       const chunkCount = await this.pipeline.embed(ctx, text);
+      ctx.signal.throwIfAborted();
       await this.transitions.complete(job, attempt, msg.msgId, chunkCount);
       this.log.info(
         { job_id: job.id, document_id: document.id, chunk_count: chunkCount },
         'job ready',
       );
     } catch (err) {
-      const { code, message } = classify(err);
-      this.log.warn({ job_id: jobId, attempt, code, err }, 'job attempt failed');
-      await this.failOrRetry(msg, job, attempt, code, message);
+      // 已逾時的 attempt：handle() 那邊已經走重試，這裡只把被 abort 的 promise 收掉，不再處理
+      if (ctx.signal.aborted) {
+        this.log.info({ job_id: job.id, attempt }, 'abandoned attempt stopped at a checkpoint');
+        return;
+      }
+      throw err;
     }
+  }
+
+  // 每 VISIBILITY_TIMEOUT / 2 秒把訊息的可見時間再往後推一個 VISIBILITY_TIMEOUT
+  private keepLease(msgId: string): ReturnType<typeof setInterval> {
+    const vt = this.env.WORKER_VISIBILITY_TIMEOUT_SEC;
+    return setInterval(
+      () => {
+        this.queue.setVt(this.db, msgId, vt).catch((err: unknown) => {
+          this.log.warn({ msg_id: msgId, err }, 'lease renewal failed');
+        });
+      },
+      Math.max(500, (vt * 1000) / 2),
+    );
   }
 
   // §9.4：未達 max_attempts 就排重試（退避 2 秒 / 5 秒），否則最終失敗
@@ -160,6 +212,13 @@ export class WorkerService implements OnApplicationShutdown {
       this.log.warn({ err }, 'heartbeat write failed');
     }
   }
+}
+
+// abort 時以 signal.reason（WorkerError）reject，讓 Promise.race 立刻結束
+function abortedPromise(signal: AbortSignal): Promise<never> {
+  return new Promise((_, reject) => {
+    signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+  });
 }
 
 // 對應 §6.3 的 worker 錯誤碼；訊息經 sanitizeError 才進資料庫
