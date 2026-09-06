@@ -4,9 +4,9 @@ import { PinoLogger } from 'nestjs-pino';
 import { ZodValidationException } from 'nestjs-zod';
 import { ZodError } from 'zod';
 
-import { currentRequestId } from '@/api/common/request-id/request-context';
 import { AppError, type ErrorDetail } from '@/shared/errors/app-error';
 import { DEFAULT_MESSAGE, ErrorCode, type HttpErrorCode } from '@/shared/errors/codes';
+import { currentRequestId } from '@/shared/request-context';
 
 type Translated = {
   status: number;

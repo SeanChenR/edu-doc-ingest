@@ -7,6 +7,7 @@ import {
   type DocumentResponse,
   toDocumentResponse,
 } from '@/api/modules/documents/documents.query.dto';
+import { validateCreateInput } from '@/api/modules/documents/documents.validation';
 import {
   IdempotencyService,
   type ReplayableResponse,
@@ -23,20 +24,6 @@ import { newId } from '@/shared/ids';
 import { EMBEDDING, type EmbeddingPort } from '@/shared/ports/embedding.port';
 import { QUEUE, type QueuePort } from '@/shared/ports/queue.port';
 import { STORAGE, type StoragePort } from '@/shared/ports/storage.port';
-import { isValidStorageKey } from '@/shared/storage-key';
-
-const SIZE_TOLERANCE = 0.05;
-const encoder = new TextEncoder();
-
-type ContentSource = { kind: 'inline'; bytes: Uint8Array } | { kind: 'storage'; key: string };
-
-interface ValidatedInput {
-  name: string;
-  mimeType: string;
-  sizeBytes: number;
-  metadata: Record<string, unknown> | null;
-  source: ContentSource;
-}
 
 export interface CreateDocumentResult extends ReplayableResponse {
   replayed: boolean;
@@ -68,7 +55,7 @@ export class DocumentsService {
     idempotencyKeyHeader: string | undefined,
   ): Promise<CreateDocumentResult> {
     const key = this.idempotency.requireKey(idempotencyKeyHeader);
-    const input = this.validate(ws.workspaceId, dto);
+    const input = validateCreateInput(this.env, ws.workspaceId, dto);
     const hash = this.idempotency.hash(dto);
     const wsId = ws.workspaceId;
 
@@ -150,64 +137,6 @@ export class DocumentsService {
       modelName: this.embedding.modelName,
       dimensions: this.embedding.dimensions,
     });
-  }
-
-  // §6.4 的輸入限制，每條對應 §6.3 的專屬錯誤碼。
-  private validate(workspaceId: string, dto: CreateDocumentDto): ValidatedInput {
-    const hasText = dto.content_text !== undefined;
-    const hasKey = dto.storage_key !== undefined;
-    if (hasText === hasKey) throw new AppError(ErrorCode.CONTENT_SOURCE_INVALID);
-
-    if (!this.env.ALLOWED_MIME_TYPES.includes(dto.mime_type)) {
-      throw new AppError(ErrorCode.UNSUPPORTED_MEDIA_TYPE);
-    }
-
-    const max = this.env.MAX_DOCUMENT_BYTES;
-    if (dto.size_bytes > max) {
-      throw new AppError(ErrorCode.DOCUMENT_TOO_LARGE, undefined, [
-        { field: 'size_bytes', issue: `must be <= ${max}` },
-      ]);
-    }
-
-    // §6.4「去除路徑分隔符」
-    const name = dto.name.replace(/[\\/]/g, '');
-    if (name.length === 0) {
-      throw new AppError(ErrorCode.VALIDATION_ERROR, undefined, [
-        { field: 'name', issue: 'must contain characters other than path separators' },
-      ]);
-    }
-
-    const metadata = dto.metadata ?? null;
-    const base = { name, mimeType: dto.mime_type, sizeBytes: dto.size_bytes, metadata };
-
-    if (dto.content_text !== undefined) {
-      // content_text 只能是文字類型；PDF 一律走 storage_key（§6.4）
-      if (!dto.mime_type.startsWith('text/')) {
-        throw new AppError(
-          ErrorCode.CONTENT_SOURCE_INVALID,
-          undefined,
-          undefined,
-          'content_text is only accepted for text/* mime types; use storage_key for PDF.',
-        );
-      }
-      const bytes = encoder.encode(dto.content_text);
-      if (bytes.byteLength > max) {
-        throw new AppError(ErrorCode.DOCUMENT_TOO_LARGE, undefined, [
-          { field: 'content_text', issue: `must be <= ${max} bytes` },
-        ]);
-      }
-      if (Math.abs(bytes.byteLength - dto.size_bytes) / dto.size_bytes > SIZE_TOLERANCE) {
-        throw new AppError(ErrorCode.SIZE_MISMATCH, undefined, [
-          { field: 'size_bytes', issue: `declared ${dto.size_bytes}, actual ${bytes.byteLength}` },
-        ]);
-      }
-      return { ...base, source: { kind: 'inline', bytes } };
-    }
-
-    const storageKey = dto.storage_key ?? '';
-    if (!isValidStorageKey(storageKey, workspaceId))
-      throw new AppError(ErrorCode.INVALID_STORAGE_KEY);
-    return { ...base, source: { kind: 'storage', key: storageKey } };
   }
 
   private async cleanupFile(storageKey: string): Promise<void> {

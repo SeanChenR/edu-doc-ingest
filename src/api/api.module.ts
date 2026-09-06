@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
-import { ZodValidationPipe } from 'nestjs-zod';
+import { ZodSerializerInterceptor, ZodValidationPipe } from 'nestjs-zod';
 
 import { ApiKeyGuard } from '@/api/common/auth/api-key.guard';
 import { AppExceptionFilter } from '@/api/common/filters/app-exception.filter';
@@ -14,7 +14,7 @@ import { DbModule } from '@/shared/db/db.module';
 import { LoggerModule } from '@/shared/logging/logger.module';
 
 // docs/DESIGN.md §2.2 請求生命週期：RequestIdMiddleware（app.ts）→ ApiKeyGuard → WorkspaceScopeGuard（controller）
-// → ZodValidationPipe → Controller → ResponseInterceptor → AppExceptionFilter。
+// → ZodValidationPipe → Controller → ResponseInterceptor（補 request_id）→ ZodSerializerInterceptor（輸出符合 DTO）→ AppExceptionFilter。
 @Module({
   imports: [
     ConfigModule,
@@ -28,6 +28,8 @@ import { LoggerModule } from '@/shared/logging/logger.module';
   providers: [
     { provide: APP_PIPE, useClass: ZodValidationPipe },
     { provide: APP_GUARD, useClass: ApiKeyGuard },
+    // 順序有意義：回應路徑由後往前跑——ResponseInterceptor 先補 request_id，ZodSerializerInterceptor 再依 DTO 驗證並剔除多餘欄位
+    { provide: APP_INTERCEPTOR, useClass: ZodSerializerInterceptor },
     { provide: APP_INTERCEPTOR, useClass: ResponseInterceptor },
     { provide: APP_FILTER, useClass: AppExceptionFilter },
   ],

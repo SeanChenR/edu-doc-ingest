@@ -14,6 +14,8 @@ export const envSchema = z.object({
   LOG_LEVEL: z.enum(['silent', 'fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   // 本機開發用 pino-pretty 輸出可讀格式；正式環境保持 JSON（false）
   LOG_PRETTY: bool,
+  // 設了就把 log 寫到這個檔案（同步寫入）；測試用它抓 pino 輸出驗證 redaction，正式環境可留空走 stdout
+  LOG_FILE: z.string().min(1).optional(),
 
   MAX_DOCUMENT_BYTES: z.coerce.number().int().positive().default(10_485_760),
   ALLOWED_MIME_TYPES: z

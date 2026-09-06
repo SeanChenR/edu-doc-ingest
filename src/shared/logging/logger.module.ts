@@ -1,8 +1,9 @@
 import { LoggerModule as PinoLoggerModule } from 'nestjs-pino';
-import type { DestinationStream } from 'pino';
+import pino, { type DestinationStream } from 'pino';
 
 import { ENV } from '@/shared/config/config.module';
 import type { Env } from '@/shared/config/env';
+import { currentRequestId } from '@/shared/request-context';
 
 // docs/DESIGN.md §7.4：pino 的 redaction 在 logger 設定層做，不靠每個呼叫點記得。
 // pino 的 redact 只支援路徑，不支援「鍵名含 key/token/secret」的模糊比對，所以列明確路徑；
@@ -50,7 +51,19 @@ export const LoggerModule = PinoLoggerModule.forRootAsync({
       },
       autoLogging: { ignore: (req: { url?: string }) => HEALTH_PATHS.has(req.url ?? '') },
       redact: { paths: REDACT_PATHS, censor: '[Redacted]' },
+      // 每一行 log 自動帶目前請求的 request_id（§7.4 串查用）
+      mixin: () => {
+        const requestId = currentRequestId();
+        return requestId === undefined ? {} : { request_id: requestId };
+      },
     };
-    return { pinoHttp: env.LOG_PRETTY ? [options, await prettyStream()] : options };
+    // 輸出目的地優先序：LOG_FILE（檔案，同步）→ LOG_PRETTY（可讀格式）→ 預設 stdout JSON
+    const stream: DestinationStream | undefined =
+      env.LOG_FILE !== undefined
+        ? pino.destination({ dest: env.LOG_FILE, sync: true, mkdir: true })
+        : env.LOG_PRETTY
+          ? await prettyStream()
+          : undefined;
+    return { pinoHttp: stream === undefined ? options : [options, stream] };
   },
 });

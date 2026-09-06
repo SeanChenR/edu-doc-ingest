@@ -8,6 +8,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import type { Response } from 'express';
+import { ZodSerializerDto } from 'nestjs-zod';
 
 import { CurrentWorkspace } from '@/api/common/auth/current-workspace.decorator';
 import type { WorkspaceContext } from '@/api/common/auth/workspace-context';
@@ -31,6 +32,7 @@ export class DocumentsController {
   @ApiOperation({ summary: 'Create a document processing job (docs/DESIGN.md §5.3)' })
   @ApiParam({ name: 'workspaceId', example: 'ws_alpha' })
   @ApiHeader({ name: 'Idempotency-Key', required: true, description: '1-128 ASCII characters' })
+  @ZodSerializerDto(CreateDocumentAcceptedDto)
   @ApiResponse({ status: 202, type: CreateDocumentAcceptedDto })
   @ApiResponse({
     status: 400,

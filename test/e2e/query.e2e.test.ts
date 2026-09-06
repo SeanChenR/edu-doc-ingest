@@ -147,6 +147,39 @@ describe('GET /v1/documents/:documentId', () => {
     expect(ready.body.request_id).toMatch(/^req_/);
   });
 
+  test('PDF via storage_key over HTTP: page_count and text_preview from the real parser (§11.1)', async () => {
+    const storageRoot = process.env['STORAGE_ROOT'] ?? './storage';
+    await Bun.write(
+      `${storageRoot}/ws_alpha/samples/query-unit-3.pdf`,
+      await Bun.file(`${import.meta.dir}/../../scripts/fixtures/unit-3-fractions.pdf`).bytes(),
+    );
+    const res = await http
+      .post('/v1/workspaces/ws_alpha/documents')
+      .set('Authorization', `Bearer ${ALPHA_KEY}`)
+      .set('Idempotency-Key', `q-pdf-${Date.now()}`)
+      .send({
+        name: 'unit-3.pdf',
+        mime_type: 'application/pdf',
+        size_bytes: 877,
+        storage_key: 'ws_alpha/samples/query-unit-3.pdf',
+      });
+    expect(res.status).toBe(202);
+    const { document_id, job_id } = Accepted.parse(res.body);
+
+    // §11.1 成功流程：輪詢 GET job 直到 ready
+    await worker.pollOnce();
+    let status = '';
+    for (let i = 0; i < 10 && status !== 'ready'; i++) {
+      status = (await get(`/v1/jobs/${job_id}`)).body.status;
+    }
+    expect(status).toBe('ready');
+
+    const doc = await get(`/v1/documents/${document_id}`);
+    expect(doc.body.page_count).toBe(2);
+    expect(doc.body.chunk_count).toBe(1);
+    expect(doc.body.result.text_preview).toContain('Fractions unit three page two');
+  });
+
   test('text_preview is capped at 500 characters', async () => {
     const long = 'x'.repeat(1200);
     const { document_id } = await create(long);

@@ -14,9 +14,15 @@ export const CreateDocumentSchema = z.object({
   metadata: z
     .record(z.string(), z.unknown())
     .optional()
-    .refine((m) => m === undefined || JSON.stringify(m).length <= METADATA_MAX_BYTES, {
-      message: `must be <= ${METADATA_MAX_BYTES} bytes when serialized`,
-    }),
+    // 以 UTF-8 位元組計（§6.4「序列化後 ≤ 4 KB」），不是字元數：CJK 一個字元佔 3 bytes
+    .refine(
+      (m) =>
+        m === undefined ||
+        new TextEncoder().encode(JSON.stringify(m)).byteLength <= METADATA_MAX_BYTES,
+      {
+        message: `must be <= ${METADATA_MAX_BYTES} bytes when serialized`,
+      },
+    ),
 });
 
 export class CreateDocumentDto extends createZodDto(CreateDocumentSchema) {}

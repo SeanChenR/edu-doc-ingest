@@ -808,6 +808,7 @@ WORKER_DB_PASSWORD=worker_pass                                               # m
 DB_CONNECT_RETRY_SEC=30            # 啟動時等待資料庫的上限
 LOG_LEVEL=info
 LOG_PRETTY=true                   # 本機用 pino-pretty 印可讀格式；正式環境設 false 保持 JSON
+# LOG_FILE=./logs/api.log         # 可選：設了就同步寫檔（測試用來驗證 redaction）
 
 MAX_DOCUMENT_BYTES=10485760
 ALLOWED_MIME_TYPES=application/pdf,text/plain,text/markdown

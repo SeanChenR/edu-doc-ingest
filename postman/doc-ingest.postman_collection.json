@@ -1,0 +1,619 @@
+{
+  "info": {
+    "name": "doc-ingest",
+    "description": "docs/DESIGN.md §11.3 的流程，加上 §6.3 每個錯誤碼。用 Collection Runner 由上往下跑一次即可；SSE（GET /v1/jobs/:id/events）是長連線，Runner 不適合，請用 scripts/curl-demo.sh 看。\n\n變數：base_url、api_key_alpha、api_key_beta（見 doc-ingest.postman_environment.json）。document_id / job_id / idem_key 由請求的 Tests 腳本自動設定。",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "document_id", "value": "" },
+    { "key": "job_id", "value": "" },
+    { "key": "idem_key", "value": "" },
+    { "key": "fail_job_id", "value": "" }
+  ],
+  "event": [
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// 每個回應都必須帶 X-Request-Id，且 body 的 request_id 與它相同（§5.1）",
+          "const rid = pm.response.headers.get('X-Request-Id');",
+          "pm.test('X-Request-Id header present', () => pm.expect(rid).to.match(/^(req_)?[0-9A-Z]{26}$|^[0-9a-f-]{36}$/i));",
+          "try {",
+          "  const body = pm.response.json();",
+          "  const inBody = body.request_id ?? (body.error && body.error.request_id);",
+          "  pm.test('body.request_id equals header', () => pm.expect(inBody).to.eql(rid));",
+          "} catch (e) {}"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "0 Health",
+      "item": [
+        {
+          "name": "GET /health",
+          "request": { "method": "GET", "url": "{{base_url}}/health" },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 ok', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().status).to.eql('ok'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /ready",
+          "request": { "method": "GET", "url": "{{base_url}}/ready" },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 ok (db + pgmq queue)', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().status).to.eql('ok'); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "1 Create document (§5.3)",
+      "item": [
+        {
+          "name": "POST documents (content_text) → 202",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.collectionVariables.set('idem_key', 'pm-' + Date.now());"]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('202 with ids and status queued', () => {",
+                  "  pm.response.to.have.status(202);",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.document_id).to.match(/^doc_/);",
+                  "  pm.expect(b.job_id).to.match(/^job_/);",
+                  "  pm.expect(b.status).to.eql('queued');",
+                  "  pm.collectionVariables.set('document_id', b.document_id);",
+                  "  pm.collectionVariables.set('job_id', b.job_id);",
+                  "});",
+                  "pm.test('not replayed on first call', () => pm.expect(pm.response.headers.has('Idempotent-Replayed')).to.be.false);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/v1/workspaces/ws_alpha/documents",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{api_key_alpha}}" },
+              { "key": "Idempotency-Key", "value": "{{idem_key}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"name\":\"unit-3.txt\",\"mime_type\":\"text/plain\",\"size_bytes\":11,\"content_text\":\"hello world\",\"metadata\":{\"grade\":5,\"subject\":\"math\"}}"
+            }
+          }
+        },
+        {
+          "name": "POST same key + same body → 202 replayed",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('202 replay with the same ids', () => {",
+                  "  pm.response.to.have.status(202);",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.document_id).to.eql(pm.collectionVariables.get('document_id'));",
+                  "  pm.expect(b.job_id).to.eql(pm.collectionVariables.get('job_id'));",
+                  "});",
+                  "pm.test('Idempotent-Replayed: true', () => pm.expect(pm.response.headers.get('Idempotent-Replayed')).to.eql('true'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/v1/workspaces/ws_alpha/documents",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{api_key_alpha}}" },
+              { "key": "Idempotency-Key", "value": "{{idem_key}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"name\":\"unit-3.txt\",\"mime_type\":\"text/plain\",\"size_bytes\":11,\"content_text\":\"hello world\",\"metadata\":{\"grade\":5,\"subject\":\"math\"}}"
+            }
+          }
+        },
+        {
+          "name": "POST same key + different body → 409",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409 IDEMPOTENCY_KEY_REUSED', () => { pm.response.to.have.status(409); pm.expect(pm.response.json().error.code).to.eql('IDEMPOTENCY_KEY_REUSED'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/v1/workspaces/ws_alpha/documents",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{api_key_alpha}}" },
+              { "key": "Idempotency-Key", "value": "{{idem_key}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"name\":\"other.txt\",\"mime_type\":\"text/plain\",\"size_bytes\":11,\"content_text\":\"hello world\"}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2 Query (§5.3, §5.4)",
+      "item": [
+        {
+          "name": "GET job (poll until ready)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 with §5.4 fields', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const j = pm.response.json();",
+                  "  pm.expect(j.id).to.eql(pm.collectionVariables.get('job_id'));",
+                  "  pm.expect(j).to.have.all.keys('id','workspace_id','document_id','kind','status','progress','attempt','max_attempts','retries_used','last_error','started_at','finished_at','created_at','updated_at','request_id');",
+                  "  pm.expect(j.retries_used).to.eql(Math.max(0, j.attempt - 1));",
+                  "});",
+                  "// worker 還沒做完就等 1 秒再打一次（Runner 會照 setNextRequest 走），最多約 30 次",
+                  "const j = pm.response.json();",
+                  "const tries = Number(pm.collectionVariables.get('poll_tries') || 0);",
+                  "if (!['ready','failed'].includes(j.status) && tries < 30) {",
+                  "  pm.collectionVariables.set('poll_tries', tries + 1);",
+                  "  setTimeout(() => {}, 1000);",
+                  "  pm.execution.setNextRequest('GET job (poll until ready)');",
+                  "} else {",
+                  "  pm.collectionVariables.set('poll_tries', 0);",
+                  "  pm.test('job reached ready', () => pm.expect(j.status).to.eql('ready'));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/v1/jobs/{{job_id}}",
+            "header": [{ "key": "Authorization", "value": "Bearer {{api_key_alpha}}" }]
+          }
+        },
+        {
+          "name": "GET document → ready with result",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 with §5.3 fields and result', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const d = pm.response.json();",
+                  "  pm.expect(d.id).to.eql(pm.collectionVariables.get('document_id'));",
+                  "  pm.expect(d.status).to.eql('ready');",
+                  "  pm.expect(d.chunk_count).to.be.a('number');",
+                  "  pm.expect(d.metadata).to.eql({ grade: 5, subject: 'math' });",
+                  "  pm.expect(d.latest_job.id).to.eql(pm.collectionVariables.get('job_id'));",
+                  "  pm.expect(d.result.text_preview).to.eql('hello world');",
+                  "  pm.expect(d.result.embedding_model).to.eql('mock-1536');",
+                  "  pm.expect(d.result.embedding_dimensions).to.eql(1536);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/v1/documents/{{document_id}}",
+            "header": [{ "key": "Authorization", "value": "Bearer {{api_key_alpha}}" }]
+          }
+        }
+      ]
+    },
+    {
+      "name": "3 Tenant isolation (§7, D-09)",
+      "item": [
+        {
+          "name": "ws_beta key → GET alpha document → 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 NOT_FOUND, never 403', () => { pm.response.to.have.status(404); pm.expect(pm.response.json().error.code).to.eql('NOT_FOUND'); });",
+                  "pm.collectionVariables.set('cross_body', JSON.stringify({ ...pm.response.json(), error: { ...pm.response.json().error, request_id: 'X' } }));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/v1/documents/{{document_id}}",
+            "header": [{ "key": "Authorization", "value": "Bearer {{api_key_beta}}" }]
+          }
+        },
+        {
+          "name": "GET unknown document → 404 identical body",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 body identical to the cross-tenant one (except request_id)', () => {",
+                  "  pm.response.to.have.status(404);",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(JSON.stringify({ ...b, error: { ...b.error, request_id: 'X' } })).to.eql(pm.collectionVariables.get('cross_body'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/v1/documents/doc_does_not_exist",
+            "header": [{ "key": "Authorization", "value": "Bearer {{api_key_alpha}}" }]
+          }
+        },
+        {
+          "name": "ws_beta key → GET alpha job → 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('404', () => pm.response.to.have.status(404));"]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/v1/jobs/{{job_id}}",
+            "header": [{ "key": "Authorization", "value": "Bearer {{api_key_beta}}" }]
+          }
+        },
+        {
+          "name": "ws_beta key → POST on alpha path → 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 NOT_FOUND', () => { pm.response.to.have.status(404); pm.expect(pm.response.json().error.code).to.eql('NOT_FOUND'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/v1/workspaces/ws_alpha/documents",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{api_key_beta}}" },
+              { "key": "Idempotency-Key", "value": "{{idem_key}}-beta" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"name\":\"x.txt\",\"mime_type\":\"text/plain\",\"size_bytes\":11,\"content_text\":\"hello world\"}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "4 Validation errors (§6.3)",
+      "item": [
+        {
+          "name": "missing name → 400 VALIDATION_ERROR with details",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 VALIDATION_ERROR', () => { pm.response.to.have.status(400); const e = pm.response.json().error; pm.expect(e.code).to.eql('VALIDATION_ERROR'); pm.expect(e.details[0].field).to.eql('name'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/v1/workspaces/ws_alpha/documents",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{api_key_alpha}}" },
+              { "key": "Idempotency-Key", "value": "{{idem_key}}-v1" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"mime_type\":\"text/plain\",\"size_bytes\":11,\"content_text\":\"hello world\"}"
+            }
+          }
+        },
+        {
+          "name": "missing Idempotency-Key → 400 IDEMPOTENCY_KEY_REQUIRED",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 IDEMPOTENCY_KEY_REQUIRED', () => { pm.response.to.have.status(400); pm.expect(pm.response.json().error.code).to.eql('IDEMPOTENCY_KEY_REQUIRED'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/v1/workspaces/ws_alpha/documents",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{api_key_alpha}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"name\":\"x.txt\",\"mime_type\":\"text/plain\",\"size_bytes\":11,\"content_text\":\"hello world\"}"
+            }
+          }
+        },
+        {
+          "name": "both content_text and storage_key → 400 CONTENT_SOURCE_INVALID",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 CONTENT_SOURCE_INVALID', () => { pm.response.to.have.status(400); pm.expect(pm.response.json().error.code).to.eql('CONTENT_SOURCE_INVALID'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/v1/workspaces/ws_alpha/documents",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{api_key_alpha}}" },
+              { "key": "Idempotency-Key", "value": "{{idem_key}}-v2" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"name\":\"x.txt\",\"mime_type\":\"text/plain\",\"size_bytes\":11,\"content_text\":\"hello world\",\"storage_key\":\"ws_alpha/x.txt\"}"
+            }
+          }
+        },
+        {
+          "name": "wrong MIME → 415 UNSUPPORTED_MEDIA_TYPE",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('415', () => { pm.response.to.have.status(415); pm.expect(pm.response.json().error.code).to.eql('UNSUPPORTED_MEDIA_TYPE'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/v1/workspaces/ws_alpha/documents",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{api_key_alpha}}" },
+              { "key": "Idempotency-Key", "value": "{{idem_key}}-v3" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"name\":\"x.png\",\"mime_type\":\"image/png\",\"size_bytes\":11,\"content_text\":\"hello world\"}"
+            }
+          }
+        },
+        {
+          "name": "size_bytes over limit → 413 DOCUMENT_TOO_LARGE",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('413', () => { pm.response.to.have.status(413); pm.expect(pm.response.json().error.code).to.eql('DOCUMENT_TOO_LARGE'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/v1/workspaces/ws_alpha/documents",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{api_key_alpha}}" },
+              { "key": "Idempotency-Key", "value": "{{idem_key}}-v4" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"name\":\"x.txt\",\"mime_type\":\"text/plain\",\"size_bytes\":10485761,\"content_text\":\"hello world\"}"
+            }
+          }
+        },
+        {
+          "name": "size_bytes off by > 5% → 422 SIZE_MISMATCH",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422', () => { pm.response.to.have.status(422); pm.expect(pm.response.json().error.code).to.eql('SIZE_MISMATCH'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/v1/workspaces/ws_alpha/documents",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{api_key_alpha}}" },
+              { "key": "Idempotency-Key", "value": "{{idem_key}}-v5" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"name\":\"x.txt\",\"mime_type\":\"text/plain\",\"size_bytes\":20,\"content_text\":\"hello world\"}"
+            }
+          }
+        },
+        {
+          "name": "storage_key with .. → 400 INVALID_STORAGE_KEY",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 INVALID_STORAGE_KEY', () => { pm.response.to.have.status(400); pm.expect(pm.response.json().error.code).to.eql('INVALID_STORAGE_KEY'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/v1/workspaces/ws_alpha/documents",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{api_key_alpha}}" },
+              { "key": "Idempotency-Key", "value": "{{idem_key}}-v6" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"name\":\"x.pdf\",\"mime_type\":\"application/pdf\",\"size_bytes\":11,\"storage_key\":\"ws_alpha/../etc/passwd\"}"
+            }
+          }
+        },
+        {
+          "name": "no API key → 401 UNAUTHORIZED",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401', () => { pm.response.to.have.status(401); pm.expect(pm.response.json().error.code).to.eql('UNAUTHORIZED'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/v1/workspaces/ws_alpha/documents",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{}" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "5 Retry exhaustion (§9.4)",
+      "item": [
+        {
+          "name": "POST [[FAIL_EMBED]] document → 202",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('202', () => { pm.response.to.have.status(202); pm.collectionVariables.set('fail_job_id', pm.response.json().job_id); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/v1/workspaces/ws_alpha/documents",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{api_key_alpha}}" },
+              { "key": "Idempotency-Key", "value": "{{idem_key}}-fail" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"name\":\"fail.txt\",\"mime_type\":\"text/plain\",\"size_bytes\":22,\"content_text\":\"[[FAIL_EMBED]] no luck.\"}"
+            }
+          }
+        },
+        {
+          "name": "GET failing job (poll until failed)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.response.to.have.status(200);",
+                  "const j = pm.response.json();",
+                  "const tries = Number(pm.collectionVariables.get('poll_tries') || 0);",
+                  "if (!['ready','failed'].includes(j.status) && tries < 40) {",
+                  "  pm.collectionVariables.set('poll_tries', tries + 1);",
+                  "  setTimeout(() => {}, 1000);",
+                  "  pm.execution.setNextRequest('GET failing job (poll until failed)');",
+                  "} else {",
+                  "  pm.collectionVariables.set('poll_tries', 0);",
+                  "  pm.test('failed after 3 attempts with a sanitized error', () => {",
+                  "    pm.expect(j.status).to.eql('failed');",
+                  "    pm.expect(j.attempt).to.eql(3);",
+                  "    pm.expect(j.retries_used).to.eql(2);",
+                  "    pm.expect(j.last_error.code).to.eql('EMBEDDING_PROVIDER_ERROR');",
+                  "    pm.expect(j.last_error.message).to.not.match(/\\n| at |\\/Users|dk_/);",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/v1/jobs/{{fail_job_id}}",
+            "header": [{ "key": "Authorization", "value": "Bearer {{api_key_alpha}}" }]
+          }
+        }
+      ]
+    }
+  ]
+}
