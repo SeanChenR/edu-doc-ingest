@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>doc-ingest 資料表</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&family=Noto+Sans+KR:wght@400;500;600&family=Noto+Serif+KR:wght@400&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;
+      --color-ink:     #2d3142;
+      --color-muted:   #4f5d75;
+      --color-accent:  #eb6c36;
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', 'Noto Serif KR', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+    body { font-family: var(--font-sans); background: var(--color-paper); color: var(--color-ink); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 3rem 2rem; }
+    .frame { max-width: 1280px; width: 100%; }
+    .eyebrow { font-family: var(--font-mono); font-size: 0.66rem; font-weight: 500; letter-spacing: 0.18em; text-transform: uppercase; color: var(--color-muted); margin-bottom: 0.5rem; }
+    h1 { font-family: var(--font-serif); font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem); font-weight: 400; letter-spacing: -0.02em; line-height: 1.15; color: var(--color-ink); margin-bottom: 1.5rem; }
+    svg { width: 100%; min-width: 900px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Data model · doc-ingest</p>
+    <h1>Seven tables and one queue, five of them behind Row-Level Security</h1>
+
+    <svg viewBox="0 48 1280 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="doc-ingest-schema-title doc-ingest-schema-desc">
+      <title id="doc-ingest-schema-title">doc-ingest data model</title>
+      <desc id="doc-ingest-schema-desc">Entity-relationship diagram: a workspace owns api keys and documents; a document has many jobs and many chunks; a job has many events; idempotency keys are keyed by workspace and key; a job points at its pgmq message, which lives outside the tenant tables. Every table inside the Row-Level Security zone carries a workspace_id column that the tenant_isolation policy checks.</desc>
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#eb6c36"/></marker>
+        <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#f5f5f5"/>
+
+      <!-- Zone: RLS boundary (drawn before edges and tables) -->
+      <path d="M 344 64 H 1208 A 8 8 0 0 1 1216 72 V 340 A 8 8 0 0 1 1208 348 H 936 A 8 8 0 0 0 928 356 V 632 A 8 8 0 0 1 920 640 H 344 A 8 8 0 0 1 336 632 V 72 A 8 8 0 0 1 344 64 Z" fill="rgba(235,108,54,0.05)" stroke="rgba(235,108,54,0.50)" stroke-width="1" stroke-dasharray="4,4"/>
+      <text x="352" y="88" fill="rgba(235,108,54,0.90)" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">RLS · ENABLE + FORCE ROW LEVEL SECURITY · POLICY tenant_isolation USING (workspace_id = current_setting('app.workspace_id'))</text>
+      <text x="48" y="88" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">NO RLS · app_user / worker_user: SELECT ONLY</text>
+
+      <!-- Edges first (behind tables). Cardinality 10–12px from each entity edge. -->
+      <!-- workspaces 1 — N api_keys (vertical) -->
+      <line x1="168" y1="232" x2="168" y2="280" stroke="#4f5d75" stroke-width="1"/>
+      <text x="180" y="248" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" font-weight="600">1</text>
+      <text x="180" y="272" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" font-weight="600">N</text>
+      <!-- workspaces 1 — N documents (horizontal, crosses the zone border) -->
+      <line x1="288" y1="160" x2="368" y2="160" stroke="#4f5d75" stroke-width="1"/>
+      <text x="300" y="152" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle" font-weight="600">1</text>
+      <text x="356" y="152" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle" font-weight="600">N</text>
+      <!-- documents 1 — N jobs -->
+      <line x1="608" y1="184" x2="656" y2="184" stroke="#4f5d75" stroke-width="1"/>
+      <text x="620" y="176" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle" font-weight="600">1</text>
+      <text x="644" y="176" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle" font-weight="600">N</text>
+      <!-- jobs 1 — N job_events -->
+      <line x1="896" y1="160" x2="944" y2="160" stroke="#4f5d75" stroke-width="1"/>
+      <text x="908" y="152" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle" font-weight="600">1</text>
+      <text x="932" y="152" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle" font-weight="600">N</text>
+      <!-- jobs.queue_msg_id 1 — 1 pgmq message (elbow through the gap right of jobs, out of the zone) -->
+      <path d="M 896 292 H 904 A 8 8 0 0 1 912 300 V 356 A 8 8 0 0 0 920 364 H 1056 A 8 8 0 0 1 1064 372 V 380" fill="none" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3"/>
+      <text x="924" y="316" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" font-weight="600">1</text>
+      <text x="1048" y="356" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end" font-weight="600">1</text>
+      <!-- documents 1 — N document_chunks (vertical) -->
+      <line x1="488" y1="332" x2="488" y2="380" stroke="#4f5d75" stroke-width="1"/>
+      <text x="500" y="348" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" font-weight="600">1</text>
+      <text x="500" y="372" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" font-weight="600">N</text>
+
+      <!-- ===== workspaces (x=48 y=112 w=240 h=120) ===== -->
+      <rect x="48" y="112" width="240" height="120" rx="6" fill="#f5f5f5"/>
+      <rect x="48" y="112" width="240" height="120" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="64" y="132" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">TABLE</text>
+      <text x="64" y="148" fill="#2d3142" font-size="14" font-weight="600" font-family="'Geist', sans-serif">workspaces</text>
+      <line x1="48" y1="160" x2="288" y2="160" stroke="rgba(45,49,66,0.12)" stroke-width="0.8"/>
+      <text x="64" y="176" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace"># id</text>
+      <text x="272" y="176" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">text</text>
+      <text x="64" y="196" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">name</text>
+      <text x="272" y="196" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">text</text>
+      <text x="64" y="216" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">created_at</text>
+      <text x="272" y="216" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">timestamptz</text>
+
+      <!-- ===== api_keys (x=48 y=280 w=240 h=180) ===== -->
+      <rect x="48" y="280" width="240" height="180" rx="6" fill="#f5f5f5"/>
+      <rect x="48" y="280" width="240" height="180" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="64" y="300" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">TABLE</text>
+      <text x="64" y="316" fill="#2d3142" font-size="14" font-weight="600" font-family="'Geist', sans-serif">api_keys</text>
+      <line x1="48" y1="328" x2="288" y2="328" stroke="rgba(45,49,66,0.12)" stroke-width="0.8"/>
+      <text x="64" y="344" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace"># id</text>
+      <text x="272" y="344" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">text</text>
+      <text x="64" y="364" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">→ workspace_id</text>
+      <text x="272" y="364" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">text</text>
+      <text x="64" y="384" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">key_hash  UQ</text>
+      <text x="272" y="384" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">text · sha256</text>
+      <text x="64" y="404" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">label</text>
+      <text x="272" y="404" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">text</text>
+      <text x="64" y="424" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">revoked_at</text>
+      <text x="272" y="424" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">timestamptz ?</text>
+      <text x="64" y="444" fill="#7a8399" font-size="10" font-family="'Geist Mono', monospace">+ 1 more</text>
+
+      <!-- ===== documents — focal (x=368 y=112 w=240 h=220) ===== -->
+      <rect x="368" y="112" width="240" height="220" rx="6" fill="#f5f5f5"/>
+      <rect x="368" y="112" width="240" height="220" rx="6" fill="#ffffff" stroke="#eb6c36" stroke-width="1.2"/>
+      <path d="M 374 112 H 602 A 6 6 0 0 1 608 118 V 160 H 368 V 118 A 6 6 0 0 1 374 112 Z" fill="rgba(235,108,54,0.08)"/>
+      <text x="384" y="132" fill="#eb6c36" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">TABLE · ROOT</text>
+      <text x="384" y="148" fill="#2d3142" font-size="14" font-weight="600" font-family="'Geist', sans-serif">documents</text>
+      <line x1="368" y1="160" x2="608" y2="160" stroke="rgba(235,108,54,0.40)" stroke-width="0.8"/>
+      <text x="384" y="176" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace"># id</text>
+      <text x="592" y="176" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">text</text>
+      <text x="384" y="196" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">→ workspace_id</text>
+      <text x="592" y="196" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">text</text>
+      <text x="384" y="216" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">storage_key</text>
+      <text x="592" y="216" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">text</text>
+      <text x="384" y="236" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">status</text>
+      <text x="592" y="236" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">pending → ready | failed</text>
+      <text x="384" y="256" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">extracted_text</text>
+      <text x="592" y="256" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">text ? · checkpoint</text>
+      <text x="384" y="276" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">page_count · chunk_count</text>
+      <text x="592" y="276" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">integer ?</text>
+      <text x="384" y="296" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">metadata</text>
+      <text x="592" y="296" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">jsonb ?</text>
+      <text x="384" y="316" fill="#7a8399" font-size="10" font-family="'Geist Mono', monospace">+ 7 more</text>
+
+      <!-- ===== jobs (x=656 y=112 w=240 h=220) ===== -->
+      <rect x="656" y="112" width="240" height="220" rx="6" fill="#f5f5f5"/>
+      <rect x="656" y="112" width="240" height="220" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="672" y="132" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">TABLE</text>
+      <text x="672" y="148" fill="#2d3142" font-size="14" font-weight="600" font-family="'Geist', sans-serif">jobs</text>
+      <line x1="656" y1="160" x2="896" y2="160" stroke="rgba(45,49,66,0.12)" stroke-width="0.8"/>
+      <text x="672" y="176" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace"># id</text>
+      <text x="880" y="176" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">text</text>
+      <text x="672" y="196" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">→ workspace_id</text>
+      <text x="880" y="196" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">text</text>
+      <text x="672" y="216" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">→ document_id</text>
+      <text x="880" y="216" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">text</text>
+      <text x="672" y="236" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">status</text>
+      <text x="880" y="236" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">queued → … → ready | failed</text>
+      <text x="672" y="256" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">progress · attempt</text>
+      <text x="880" y="256" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">smallint</text>
+      <text x="672" y="276" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">last_error_code · _message</text>
+      <text x="880" y="276" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">text ?</text>
+      <text x="672" y="296" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">queue_msg_id</text>
+      <text x="880" y="296" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">bigint · pgmq</text>
+      <text x="672" y="316" fill="#7a8399" font-size="10" font-family="'Geist Mono', monospace">+ 6 more</text>
+
+      <!-- ===== job_events (x=944 y=112 w=240 h=220) ===== -->
+      <rect x="944" y="112" width="240" height="220" rx="6" fill="#f5f5f5"/>
+      <rect x="944" y="112" width="240" height="220" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="960" y="132" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">TABLE · APPEND-ONLY</text>
+      <text x="960" y="148" fill="#2d3142" font-size="14" font-weight="600" font-family="'Geist', sans-serif">job_events</text>
+      <line x1="944" y1="160" x2="1184" y2="160" stroke="rgba(45,49,66,0.12)" stroke-width="0.8"/>
+      <text x="960" y="176" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace"># id</text>
+      <text x="1168" y="176" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">bigserial · SSE id</text>
+      <text x="960" y="196" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">→ job_id</text>
+      <text x="1168" y="196" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">text</text>
+      <text x="960" y="216" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">workspace_id</text>
+      <text x="1168" y="216" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">text</text>
+      <text x="960" y="236" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">type</text>
+      <text x="1168" y="236" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">stage_changed · … · failed</text>
+      <text x="960" y="256" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">stage</text>
+      <text x="1168" y="256" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">text ?</text>
+      <text x="960" y="276" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">progress · attempt</text>
+      <text x="1168" y="276" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">smallint</text>
+      <text x="960" y="296" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">payload</text>
+      <text x="1168" y="296" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">jsonb ?</text>
+      <text x="960" y="316" fill="#7a8399" font-size="10" font-family="'Geist Mono', monospace">+ 2 more</text>
+
+      <!-- ===== document_chunks (x=368 y=380 w=240 h=220) ===== -->
+      <rect x="368" y="380" width="240" height="220" rx="6" fill="#f5f5f5"/>
+      <rect x="368" y="380" width="240" height="220" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="384" y="400" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">TABLE</text>
+      <text x="384" y="416" fill="#2d3142" font-size="14" font-weight="600" font-family="'Geist', sans-serif">document_chunks</text>
+      <line x1="368" y1="428" x2="608" y2="428" stroke="rgba(45,49,66,0.12)" stroke-width="0.8"/>
+      <text x="384" y="444" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace"># id</text>
+      <text x="592" y="444" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">text</text>
+      <text x="384" y="464" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">→ document_id</text>
+      <text x="592" y="464" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">text</text>
+      <text x="384" y="484" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">workspace_id</text>
+      <text x="592" y="484" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">text</text>
+      <text x="384" y="504" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">chunk_index  UQ</text>
+      <text x="592" y="504" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">integer</text>
+      <text x="384" y="524" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">content</text>
+      <text x="592" y="524" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">text</text>
+      <text x="384" y="544" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">token_count</text>
+      <text x="592" y="544" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">integer</text>
+      <text x="384" y="564" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">embedding</text>
+      <text x="592" y="564" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">vector(1536) ?</text>
+      <text x="384" y="584" fill="#7a8399" font-size="10" font-family="'Geist Mono', monospace">+ 1 more</text>
+
+      <!-- ===== idempotency_keys (x=656 y=380 w=240 h=200) ===== -->
+      <rect x="656" y="380" width="240" height="200" rx="6" fill="#f5f5f5"/>
+      <rect x="656" y="380" width="240" height="200" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="672" y="400" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">TABLE · NO FK</text>
+      <text x="672" y="416" fill="#2d3142" font-size="14" font-weight="600" font-family="'Geist', sans-serif">idempotency_keys</text>
+      <line x1="656" y1="428" x2="896" y2="428" stroke="rgba(45,49,66,0.12)" stroke-width="0.8"/>
+      <text x="672" y="444" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace"># workspace_id</text>
+      <text x="880" y="444" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">text</text>
+      <text x="672" y="464" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace"># key</text>
+      <text x="880" y="464" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">text · Idempotency-Key</text>
+      <text x="672" y="484" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">request_hash</text>
+      <text x="880" y="484" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">text · sha256</text>
+      <text x="672" y="504" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">response_status</text>
+      <text x="880" y="504" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">smallint ?</text>
+      <text x="672" y="524" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">response_body</text>
+      <text x="880" y="524" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">jsonb ?</text>
+      <text x="672" y="544" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">expires_at</text>
+      <text x="880" y="544" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">timestamptz</text>
+      <text x="672" y="564" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">created_at</text>
+      <text x="880" y="564" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">timestamptz</text>
+
+      <!-- ===== pgmq queue + archive — store treatment, outside the RLS zone (x=944 y=380 w=240 h=180) ===== -->
+      <rect x="944" y="380" width="240" height="180" rx="6" fill="#f5f5f5"/>
+      <rect x="944" y="380" width="240" height="180" rx="6" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+      <text x="960" y="400" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">PGMQ · QUEUE + ARCHIVE · NO RLS</text>
+      <text x="960" y="416" fill="#2d3142" font-size="14" font-weight="600" font-family="'Geist', sans-serif">q_ / a_document_jobs</text>
+      <line x1="944" y1="428" x2="1184" y2="428" stroke="rgba(45,49,66,0.12)" stroke-width="0.8"/>
+      <text x="960" y="444" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace"># msg_id</text>
+      <text x="1168" y="444" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">bigint</text>
+      <text x="960" y="464" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">read_ct</text>
+      <text x="1168" y="464" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">integer · = attempt</text>
+      <text x="960" y="484" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">vt</text>
+      <text x="1168" y="484" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">timestamptz · lease</text>
+      <text x="960" y="504" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">enqueued_at</text>
+      <text x="1168" y="504" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">timestamptz</text>
+      <text x="960" y="524" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">message</text>
+      <text x="1168" y="524" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">jsonb · {job_id, ws_id}</text>
+      <text x="960" y="544" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">archived_at</text>
+      <text x="1168" y="544" fill="#4f5d75" font-size="10" font-family="'Geist Mono', monospace" text-anchor="end">timestamptz · a_ only</text>
+
+      <!-- Editorial aside, outside the zone under the queue box (open canvas) -->
+      <text x="944" y="592" fill="#4f5d75" font-size="14" font-style="italic" font-family="'Instrument Serif', serif">Every table in the zone carries workspace_id,</text>
+      <text x="944" y="612" fill="#4f5d75" font-size="14" font-style="italic" font-family="'Instrument Serif', serif">even where it is not a foreign key — the policy</text>
+      <text x="944" y="632" fill="#4f5d75" font-size="14" font-style="italic" font-family="'Instrument Serif', serif">needs it on the row, not two joins away.</text>
+      <text x="944" y="664" fill="#4f5d75" font-size="14" font-style="italic" font-family="'Instrument Serif', serif">api reads as app_user (policy applies); worker</text>
+      <text x="944" y="684" fill="#4f5d75" font-size="14" font-style="italic" font-family="'Instrument Serif', serif">reads as worker_user (BYPASSRLS) to poll the queue,</text>
+      <text x="944" y="704" fill="#4f5d75" font-size="14" font-style="italic" font-family="'Instrument Serif', serif">but still runs each job inside withTenant().</text>
+
+      <!-- Legend strip -->
+      <line x1="48" y1="720" x2="1232" y2="720" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+      <text x="48" y="740" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">LEGEND</text>
+      <text x="128" y="740" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">#</text>
+      <text x="140" y="740" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">PRIMARY KEY</text>
+      <text x="240" y="740" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">→</text>
+      <text x="252" y="740" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">FOREIGN KEY</text>
+      <text x="352" y="740" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">?</text>
+      <text x="364" y="740" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">NULLABLE</text>
+      <text x="448" y="740" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace">UQ</text>
+      <text x="468" y="740" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">UNIQUE</text>
+      <line x1="544" y1="736" x2="576" y2="736" stroke="#4f5d75" stroke-width="1"/>
+      <text x="584" y="740" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">1 — N RELATIONSHIP</text>
+      <rect x="712" y="728" width="24" height="12" rx="2" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1"/>
+      <text x="744" y="740" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">AGGREGATE ROOT</text>
+      <rect x="864" y="728" width="24" height="12" rx="2" fill="rgba(235,108,54,0.05)" stroke="rgba(235,108,54,0.50)" stroke-width="1" stroke-dasharray="4,4"/>
+      <text x="896" y="740" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">RLS ZONE (5 TABLES)</text>
+      <rect x="1064" y="728" width="24" height="12" rx="2" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+      <text x="1096" y="740" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">PGMQ (NO RLS)</text>
+    </svg>
+  </div>
+</body>
+</html>

@@ -12,15 +12,16 @@ Multi-tenant (多租戶) 教材匯入服務：這邊是設計用自己的 API ke
 
 1. [快速啟動](#1-快速啟動)
 2. [技術棧](#2-技術棧)
-3. [認證與 seed key](#3-認證與-seed-key)
-4. [API 摘要](#4-api-摘要)
-5. [測試與驗證](#5-測試與驗證)
-6. [架構決策](#6-架構決策摘要完整版見-docsdecisionsmd)
-7. [資安設計](#7-資安設計)
-8. [已知限制](#8-已知限制)
-9. [正式環境延伸](#9-正式環境延伸)
-10. [後續延伸的端點](#10-後續延伸的端點本次刻意不做d-16)
-11. [專案結構與環境變數](#11-專案結構與環境變數)
+3. [專案結構與環境變數](#3-專案結構與環境變數)
+4. [認證與 seed key](#4-認證與-seed-key)
+5. [API 摘要](#5-api-摘要)
+6. [測試與驗證](#6-測試與驗證)
+7. [資料表](#7-資料表)
+8. [架構決策](#8-架構決策摘要完整版見-docsdecisionsmd)
+9. [資安設計](#9-資安設計)
+10. [已知限制](#10-已知限制)
+11. [正式環境延伸](#11-正式環境延伸)
+12. [後續延伸的端點](#12-後續延伸的端點本次刻意不做d-16)
 
 ## 1. 快速啟動
 
@@ -33,7 +34,7 @@ brew install postgresql@18 pgvector && brew services start postgresql@18
 createdb doc_ingest
 bun install
 cp .env.example .env            # 本機預設值已可直接用
-bun run migrate                 # 建角色、pgvector、pgmq、六張表、RLS
+bun run migrate                 # 建角色、pgvector、pgmq、七張表、RLS
 bun run seed                    # 兩個 workspace、兩把 API key、各一份 ready 的範例 PDF
 bun run dev                     # api（:3000）與 worker 一起起來，含熱重載
 ```
@@ -77,7 +78,65 @@ bun run lint && bun run fmt:check && bun run typecheck
 | Lint / Format | **oxlint**（type-aware）/ **oxfmt** | oxc 系列，Rust 寫的，快（D-18） |
 | 容器 | Podman compose（Docker 相容）、一份 `Dockerfile` 兩個 target | `api` / `worker` 兩個映像共用 `src/shared/`（D-06） |
 
-## 3. 認證與 seed key
+## 3. 專案結構與環境變數
+
+```
+src/
+├── api/                          api 映像
+│   ├── main.ts                   進入點：先 import @nestjs/common 再動態載入 app（Bun 模組順序）
+│   ├── app.ts                    createApp()：helmet、request id、body 上限、Swagger
+│   ├── api.module.ts             全域 pipe（Zod）、guard（ApiKey）、interceptor、filter
+│   ├── common/
+│   │   ├── request-id/           middleware + AsyncLocalStorage，X-Request-Id 進出
+│   │   ├── auth/                 ApiKeyGuard（全域）、WorkspaceScopeGuard（:workspaceId）、@Public、@CurrentWorkspace
+│   │   ├── filters/              AppExceptionFilter → { error: { code, message, request_id, details? } }
+│   │   └── interceptors/         ResponseInterceptor 補 request_id
+│   └── modules/
+│       ├── health/               /health、/ready（@Public）
+│       ├── documents/            POST（controller + service + validation）與 GET document（query controller）
+│       ├── idempotency/          canonical JSON hash、claim / replay
+│       └── jobs/                 GET job、SSE（sse.controller → SseService → SseSession）、JobEventsListener（sql.listen）
+├── worker/                       worker 映像
+│   ├── main.ts                   進入點：run() 到收到 SIGTERM
+│   ├── worker.service.ts         主迴圈：pgmq.read、slot 補位、續租約、逾時、優雅關閉
+│   ├── job-transitions.ts        所有狀態變更（UPDATE jobs + INSERT job_events + NOTIFY 同交易）
+│   └── pipeline/                 extract → embed 兩階段、checkpoint、失敗注入
+└── shared/                       兩個映像共用
+    ├── config/                   Zod env schema、ConfigModule（ENV token）
+    ├── errors/                   ErrorCode、AppError、WorkerError、sanitizeError
+    ├── logging/                  pino 設定、redaction、LOG_FILE / LOG_PRETTY
+    ├── db/                       client（createDb、withTenant）、rows（各表 Row 型別）、repositories/（七張表，所有 SQL）
+    ├── ports/                    StoragePort、QueuePort、ParserPort、EmbeddingPort、ChunkerPort
+    ├── adapters/                 local-fs、pgmq、unpdf、mock embedding、fixed-window chunker
+    ├── ids.ts                    newId('doc' | 'job' | …)
+    ├── storage-key.ts            isValidStorageKey
+    └── request-context.ts        AsyncLocalStorage 取 request_id
+
+migrations/                       001 擴充套件 + pgmq + 佇列；002 七張表、索引、RLS、角色權限；pgmq/pgmq.sql 原樣內附
+scripts/                          migrate.ts、seed.ts、dev.ts、curl-demo.sh、worker-demo.sh、compose-demo.sh、fixtures/
+test/                             e2e/（8 檔 + helpers）、unit/（9 檔）
+postman/                          collection + environment
+docs/                             DESIGN.md（規格）、DECISIONS.md（D-01 ～ D-26）、diagrams/（.html 原始檔、.svg、README 用的 .png）
+docker-compose.yml、Dockerfile    db / api / worker；一份 Dockerfile 兩個 target
+```
+
+依賴關係只有一個方向：`api` 與 `worker` 依賴 `shared`，`shared` 不知道它們的存在；`shared/ports` 是介面，`shared/adapters` 是實作，service 只認 port 的 token。
+
+環境變數全部在 `.env.example`，含說明；規格對照 `docs/DESIGN.md` §13。常用的：
+
+| 變數 | 預設 | 用途 |
+|---|---|---|
+| `DATABASE_URL` / `DATABASE_URL_WORKER` / `DATABASE_URL_ADMIN` | 本機 5432 | api（`app_user`）/ worker（`worker_user`）/ migrate 與 seed（管理帳號） |
+| `APP_DB_PASSWORD` / `WORKER_DB_PASSWORD` | `app_pass` / `worker_pass` | `migrate.ts` 建兩個角色用 |
+| `MAX_DOCUMENT_BYTES` / `ALLOWED_MIME_TYPES` | 10 MB / pdf, plain, markdown | §6.4 輸入限制 |
+| `STORAGE_ROOT` | `./storage` | LocalFsStorage 根目錄 |
+| `CHUNK_SIZE` / `CHUNK_OVERLAP` | 1000 / 200 | D-26 |
+| `STAGE_DELAY_MS` / `FAILURE_INJECTION` | 800 / true | 讓 SSE 看得到進度、啟用 `[[FAIL_*]]`；**正式環境 0 / false** |
+| `WORKER_CONCURRENCY` / `WORKER_VISIBILITY_TIMEOUT_SEC` / `WORKER_MAX_ATTEMPTS` / `JOB_TIMEOUT_MS` | 2 / 60 / 3 / 300000 | worker 主迴圈 |
+| `LOG_LEVEL` / `LOG_PRETTY` / `LOG_FILE` | info / true / 無 | 正式環境 `LOG_PRETTY=false` 輸出 JSON |
+| `SEED_API_KEY_ALPHA` / `SEED_API_KEY_BETA` | `dk_*_local_only` | 只給 seed 與測試；正式環境不存在 |
+
+## 4. 認證與 seed key
 
 一把 API key = 一個 workspace 的完整權限（D-08）。請求帶 `Authorization: Bearer <key>`；資料庫只存 SHA-256，`revoked_at` 設了就失效。
 
@@ -88,7 +147,7 @@ bun run lint && bun run fmt:check && bun run typecheck
 
 用另一個 workspace 的 key 讀資源，回應與「不存在」**逐位元相同**：`404 NOT_FOUND`，刻意不回 403（D-09）。
 
-## 4. API 摘要
+## 5. API 摘要
 
 Swagger UI：http://localhost:3000/docs ，OpenAPI JSON：`/docs-json`。所有回應都帶 `X-Request-Id` 標頭與 `request_id` 欄位（客戶端可自帶 ULID 格式的 `X-Request-Id`，會原樣回傳）。
 
@@ -228,7 +287,7 @@ curl -s -H 'Authorization: Bearer dk_alpha_local_only' http://localhost:3000/v1/
 
 測試用的失敗注入（`FAILURE_INJECTION=true` 時）：在 `content_text` 或檔名放 `[[FAIL_EXTRACT]]`、`[[FAIL_EMBED_ONCE]]`、`[[FAIL_EMBED]]`、`[[SLOW]]`。
 
-## 5. 測試與驗證
+## 6. 測試與驗證
 
 三種方式互補：`bun test` 是自動化基準；`scripts/*.sh` 是能對著跑中的服務重現主流程的腳本；Postman 給不想看 shell 的人。
 
@@ -293,7 +352,28 @@ API_URL=http://localhost:3000 API_KEY_ALPHA=... ./scripts/curl-demo.sh
 
 Collection 層級的 test script 對**每個**回應檢查 `X-Request-Id` 標頭存在且與 body 的 `request_id` 相同（§5.1）。變數 `document_id`、`job_id`、`fail_job_id` 由前面的請求寫入，後面的請求直接用。
 
-## 6. 架構決策（摘要，完整版見 `docs/DECISIONS.md`）
+## 7. 資料表
+
+七張表都在 `migrations/002_tables.sql`（DDL、索引、RLS policy、GRANT 都在同一個檔），對照 `docs/DESIGN.md` §4。下圖是關係與租戶邊界；欄位只列跟流程有關的，完整欄位看 DDL。
+
+![doc-ingest 資料表](docs/diagrams/schema.png)
+
+| 表 | 一列是什麼 | 關鍵欄位 | RLS |
+|---|---|---|---|
+| `workspaces` | 一個租戶（學校 / 單位） | `id`（`ws_…`）、`name` | 無；api / worker 只有 `SELECT` |
+| `api_keys` | 一把 key 對一個 workspace | `key_hash`（只存 SHA-256，`UNIQUE`）、`revoked_at` | 無；只有 `SELECT` |
+| `documents` | 一份教材與它的抽取結果 | `storage_key`、`status`（pending → processing → ready / failed）、`extracted_text`（抽取 checkpoint，D-13）、`page_count`、`chunk_count`、`metadata jsonb`、`latest_job_id`（軟指標，不設 FK） | ✅ |
+| `document_chunks` | 一段切好的文字與向量 | `(document_id, chunk_index)` `UNIQUE` 就是 upsert 的冪等鍵、`content`、`token_count`、`embedding vector(1536)`（尚未建索引，§10） | ✅ |
+| `jobs` | 一次處理任務的狀態機 | `status`（queued → extracting → embedding → ready / failed）、`progress`、`attempt` / `max_attempts`、`last_error_code` / `_message`（已 sanitize）、`queue_msg_id`（對應 pgmq 訊息） | ✅ |
+| `job_events` | 每一次狀態變更（append-only） | `id bigserial` 就是 SSE 的 `id:`（D-05）、`type`（stage_changed / progress / retry_scheduled / completed / failed）、`stage`、`progress`、`attempt`、`payload jsonb` | ✅ |
+| `idempotency_keys` | 一次 POST 的收據 | 主鍵 `(workspace_id, key)` 就是鎖（D-11）、`request_hash`、`response_body`（重播用）、`expires_at` | ✅ |
+
+- **RLS 的五張表都有 `workspace_id`**，policy 一模一樣：`USING (workspace_id = current_setting('app.workspace_id', true))`。`document_chunks`、`job_events`、`idempotency_keys` 的 `workspace_id` 不是 FK，是為了讓 policy 在該列上直接判斷，不必 join 回 `documents` / `jobs`。沒設定 `app.workspace_id` 時 `current_setting` 回 NULL，一列都對不到。
+- **api 用 `app_user`（受 policy 限制），worker 用 `worker_user`（`BYPASSRLS`，領佇列需要跨租戶），但 worker 處理每件工作仍包在 `withTenant()` 裡**（§9）。
+- **索引**：`documents (workspace_id, created_at DESC)`、`documents (workspace_id, status)`、`jobs (workspace_id, created_at DESC)`、`jobs (document_id)`、`job_events (job_id, id)`（SSE 補發用）、`api_keys (workspace_id)`。都以 `workspace_id` 開頭，跟 RLS 的過濾條件一致。
+- **pgmq 的表**在 `pgmq` schema，不受 RLS（worker 要跨租戶領件）：`q_document_jobs`（佇列）與 `a_document_jobs`（終止後歸檔）長得一樣，`jobs.queue_msg_id` 指向它的 `msg_id`（軟指標，不設 FK）。訊息只放 `{ job_id, workspace_id }`（D-12）；`read_ct` 就是 attempt，`vt` 是租約到期時間（§8 續租約）。
+
+## 8. 架構決策（摘要，完整版見 `docs/DECISIONS.md`）
 
 一份文件從 `POST` 到 `completed` 的完整路徑（每支箭頭都是一個交易；NOTIFY 只當叫醒鈴）：
 
@@ -310,7 +390,7 @@ Collection 層級的 test script 對**每個**回應檢查 `X-Request-Id` 標頭
 - **content_text 也走 StoragePort**（D-25）：貼上的文字先寫成檔案，之後與 PDF 完全同一條路徑；`extracted_text` 永遠是 worker 的產物。
 - **不用 ORM**（D-02）、**Zod + nestjs-zod**（D-17）、**oxlint + oxfmt**（D-18）、**兩個映像一個 Dockerfile**（D-06）、**不做快取**（D-07）、**不做 RBAC**（D-08）。
 
-## 7. 資安設計
+## 9. 資安設計
 
 - **租戶隔離兩道防線**（D-10）：第一道，每個 repository 方法第一參數都是 `workspaceId`，SQL 一律帶 `workspace_id`；第二道，`documents`、`document_chunks`、`jobs`、`job_events`、`idempotency_keys` 全部 `ENABLE` + `FORCE ROW LEVEL SECURITY`，api 的每個查詢都在 `withTenant()` 交易內先 `set_config('app.workspace_id')`。api 用 `app_user`（受 RLS 限制）；worker 用 `worker_user`（`BYPASSRLS` 才能跨租戶領佇列），但處理每件工作仍包 `withTenant`。測試裡有一條故意不帶 `WHERE` 的查詢，證明第二道真的擋住。
 - **輸入限制**（§6.4）：MIME 白名單、`size_bytes` ≤ 10 MB 且與內容差異 ≤ 5 %、`metadata` 序列化 ≤ 4 KB、`name` 去路徑分隔符、body parser 層就擋大小。
@@ -319,7 +399,7 @@ Collection 層級的 test script 對**每個**回應檢查 `X-Request-Id` 標頭
 - **日誌遮罩**（§7.4）：pino 在 logger 層遮 `authorization`、`content_text`、`extracted_text` 與 key/token/secret 類欄位；request 內每行 log 自動帶 `request_id`。錯誤訊息進 `jobs.last_error_message` 前經 `sanitizeError()` 去堆疊、金鑰樣式字串、URL query、絕對路徑。
 - **錯誤不洩漏**：未預期例外對外固定 "Unexpected error."，`/ready` 失敗只回固定訊息，細節進 log。
 
-## 8. 已知限制
+## 10. 已知限制
 
 - **API key 撤銷延遲**：guard 快取 60 秒，撤銷的 key 在每台 api 上最多再活 60 秒。
 - **沒有 rate limit**：同一把 key 可以無上限地 POST 10 MB 文件或開 SSE 連線；正式環境放到 `@nestjs/throttler`（以 workspace 為 key）或前面的 LB。
@@ -330,7 +410,7 @@ Collection 層級的 test script 對**每個**回應檢查 `X-Request-Id` 標頭
 - **Embedding 是 mock**：sha256 產生的確定性向量，沒有語意；`document_chunks.embedding` 也還沒建索引（沒有查詢端點）。
 - **單一 PostgreSQL 是所有東西的瓶頸**：資料、佇列、通知都在同一顆 DB。對這個規模是優點（一個交易搞定），量大時佇列與通知要先搬出去，見下一節。
 
-## 9. 正式環境延伸
+## 11. 正式環境延伸
 
 - **PostgreSQL RLS**：**已實作**（§7、D-10），不是延伸項目。正式環境要補的是：每個 workspace 的 DB 連線改由 connection pooler（PgBouncer / Cloud SQL Auth Proxy）管理時，`set_config(..., true)` 是交易範圍所以仍安全；另外把 `app_user` 的密碼移到 Secret Manager。
 - **佇列 (Queue)**：Cloud SQL 若不支援 pgmq 擴充套件，目前的 SQL 檔安裝方式（D-23）直接可用；或換 Cloud Tasks，`QueuePort` 介面不變。或者可採用其餘 Queue 的服務，未必要使用 pgmq。若換 **Redis queue（BullMQ）**：`PgmqQueue` 換成 `BullMqQueue` 實作同一個 `QueuePort`（`send` / `read` / `archive` / `setVisibility`），但會失去「與業務寫入同交易」這個保證，要改成 outbox：POST 只寫 `jobs`（狀態 `queued`），一個 relay 把未投遞的列送進 Redis 再標記，或用 BullMQ 的 `jobId = job_id` 做去重。
@@ -344,7 +424,7 @@ Collection 層級的 test script 對**每個**回應檢查 `X-Request-Id` 標頭
 - **Chunk 策略**：目前固定字元視窗（D-26），接真模型後改依標題 / 段落結構切分只換 `ChunkerPort` 的實作。
 - **部署**：`Dockerfile` 已是兩個 target，直接對應 Cloud Run 兩個 service（api 設 min instances ≥ 1 才能維持 SSE；worker 用 always-on CPU）或一個 Fly.io app 兩個 process group。
 
-## 10. 後續延伸的端點（本次刻意不做，D-16）
+## 12. 後續延伸的端點（本次刻意不做，D-16）
 
 現有的四個端點是「一份文件的生命週期」；下面是接前端時會先需要的，每個都能沿用現在的 guard / repository / 錯誤格式，不用動架構。
 
@@ -357,65 +437,8 @@ Collection 層級的 test script 對**每個**回應檢查 `X-Request-Id` 標頭
 | `POST /v1/jobs/:id/cancel` | 取消排隊中 / 處理中的 job | 排隊中：`pgmq.delete` + 狀態 `cancelled`；處理中：worker 每個 checkpoint 檢查 `jobs.cancel_requested`，`AbortController` 已經在了 |
 | `POST /v1/jobs/:id/retry` | 失敗的 job 手動重試 | 新的 attempt 從 1 開始、沿用 checkpoint（`extracted_text` 還在就不重抽）；需要 `Idempotency-Key` |
 | `POST /v1/documents/:id/reprocess` | 換模型 / 換 chunk 策略後重跑 | 建新 job（`kind: reprocess`），清掉舊 chunks 再 upsert；舊 job 留著當歷史 |
-| `POST /v1/workspaces/:id/documents` 的 multipart 版本 | 直接上傳檔案 | 小檔走 multipart，大檔走 signed URL（§9）；`size_bytes` 由伺服器算，不信客戶端 |
+| `POST /v1/workspaces/:id/documents` 的 multipart 版本 | 直接上傳檔案 | 小檔走 multipart，大檔走 signed URL（§11）；`size_bytes` 由伺服器算，不信客戶端 |
 | `POST /v1/workspaces/:id/search` | 向量搜尋 | body `{ query, top_k }` → 用 `EmbeddingPort` 算 query 向量 → `ORDER BY embedding <=> $1`；先建 HNSW 索引；RLS 自動限定 workspace |
 | `DELETE /v1/documents/:id` | 刪文件 | 軟刪（`deleted_at`）+ 排一個清 storage 的 job；chunks 用 FK cascade |
-| `POST /v1/workspaces/:id/api-keys`、`DELETE …/:keyId` | key 管理 | 需要先有 OIDC（§9）分辨「誰」可以發 key；目前 seed 直接寫表 |
+| `POST /v1/workspaces/:id/api-keys`、`DELETE …/:keyId` | key 管理 | 需要先有 OIDC（§11）分辨「誰」可以發 key；目前 seed 直接寫表 |
 
-## 11. 專案結構與環境變數
-
-```
-src/
-├── api/                          api 映像
-│   ├── main.ts                   進入點：先 import @nestjs/common 再動態載入 app（Bun 模組順序）
-│   ├── app.ts                    createApp()：helmet、request id、body 上限、Swagger
-│   ├── api.module.ts             全域 pipe（Zod）、guard（ApiKey）、interceptor、filter
-│   ├── common/
-│   │   ├── request-id/           middleware + AsyncLocalStorage，X-Request-Id 進出
-│   │   ├── auth/                 ApiKeyGuard（全域）、WorkspaceScopeGuard（:workspaceId）、@Public、@CurrentWorkspace
-│   │   ├── filters/              AppExceptionFilter → { error: { code, message, request_id, details? } }
-│   │   └── interceptors/         ResponseInterceptor 補 request_id
-│   └── modules/
-│       ├── health/               /health、/ready（@Public）
-│       ├── documents/            POST（controller + service + validation）與 GET document（query controller）
-│       ├── idempotency/          canonical JSON hash、claim / replay
-│       └── jobs/                 GET job、SSE（sse.controller → SseService → SseSession）、JobEventsListener（sql.listen）
-├── worker/                       worker 映像
-│   ├── main.ts                   進入點：run() 到收到 SIGTERM
-│   ├── worker.service.ts         主迴圈：pgmq.read、slot 補位、續租約、逾時、優雅關閉
-│   ├── job-transitions.ts        所有狀態變更（UPDATE jobs + INSERT job_events + NOTIFY 同交易）
-│   └── pipeline/                 extract → embed 兩階段、checkpoint、失敗注入
-└── shared/                       兩個映像共用
-    ├── config/                   Zod env schema、ConfigModule（ENV token）
-    ├── errors/                   ErrorCode、AppError、WorkerError、sanitizeError
-    ├── logging/                  pino 設定、redaction、LOG_FILE / LOG_PRETTY
-    ├── db/                       client（createDb、withTenant）、rows（各表 Row 型別）、repositories/（六張表，所有 SQL）
-    ├── ports/                    StoragePort、QueuePort、ParserPort、EmbeddingPort、ChunkerPort
-    ├── adapters/                 local-fs、pgmq、unpdf、mock embedding、fixed-window chunker
-    ├── ids.ts                    newId('doc' | 'job' | …)
-    ├── storage-key.ts            isValidStorageKey
-    └── request-context.ts        AsyncLocalStorage 取 request_id
-
-migrations/                       001 擴充套件 + pgmq + 佇列；002 六張表、索引、RLS、角色權限；pgmq/pgmq.sql 原樣內附
-scripts/                          migrate.ts、seed.ts、dev.ts、curl-demo.sh、worker-demo.sh、compose-demo.sh、fixtures/
-test/                             e2e/（8 檔 + helpers）、unit/（9 檔）
-postman/                          collection + environment
-docs/                             DESIGN.md（規格）、DECISIONS.md（D-01 ～ D-26）、diagrams/（.html 原始檔、.svg、README 用的 .png）
-docker-compose.yml、Dockerfile    db / api / worker；一份 Dockerfile 兩個 target
-```
-
-依賴關係只有一個方向：`api` 與 `worker` 依賴 `shared`，`shared` 不知道它們的存在；`shared/ports` 是介面，`shared/adapters` 是實作，service 只認 port 的 token。
-
-環境變數全部在 `.env.example`，含說明；規格對照 `docs/DESIGN.md` §13。常用的：
-
-| 變數 | 預設 | 用途 |
-|---|---|---|
-| `DATABASE_URL` / `DATABASE_URL_WORKER` / `DATABASE_URL_ADMIN` | 本機 5432 | api（`app_user`）/ worker（`worker_user`）/ migrate 與 seed（管理帳號） |
-| `APP_DB_PASSWORD` / `WORKER_DB_PASSWORD` | `app_pass` / `worker_pass` | `migrate.ts` 建兩個角色用 |
-| `MAX_DOCUMENT_BYTES` / `ALLOWED_MIME_TYPES` | 10 MB / pdf, plain, markdown | §6.4 輸入限制 |
-| `STORAGE_ROOT` | `./storage` | LocalFsStorage 根目錄 |
-| `CHUNK_SIZE` / `CHUNK_OVERLAP` | 1000 / 200 | D-26 |
-| `STAGE_DELAY_MS` / `FAILURE_INJECTION` | 800 / true | 讓 SSE 看得到進度、啟用 `[[FAIL_*]]`；**正式環境 0 / false** |
-| `WORKER_CONCURRENCY` / `WORKER_VISIBILITY_TIMEOUT_SEC` / `WORKER_MAX_ATTEMPTS` / `JOB_TIMEOUT_MS` | 2 / 60 / 3 / 300000 | worker 主迴圈 |
-| `LOG_LEVEL` / `LOG_PRETTY` / `LOG_FILE` | info / true / 無 | 正式環境 `LOG_PRETTY=false` 輸出 JSON |
-| `SEED_API_KEY_ALPHA` / `SEED_API_KEY_BETA` | `dk_*_local_only` | 只給 seed 與測試；正式環境不存在 |
