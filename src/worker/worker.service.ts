@@ -3,15 +3,14 @@ import { PinoLogger } from 'nestjs-pino';
 
 import { ENV } from '@/shared/config/config.module';
 import type { Env } from '@/shared/config/env';
-import { type Db, withTenant } from '@/shared/db/client';
+import type { Db } from '@/shared/db/client';
 import { DB } from '@/shared/db/db.module';
-import { DocumentsRepository } from '@/shared/db/repositories/documents.repository';
-import { JobsRepository } from '@/shared/db/repositories/jobs.repository';
+import type { JobRow } from '@/shared/db/rows';
 import { ErrorCode } from '@/shared/errors/codes';
 import { sanitizeError } from '@/shared/errors/sanitize';
 import { WorkerError, type WorkerErrorCode } from '@/shared/errors/worker-error';
 import { QUEUE, type QueueMessage, type QueuePort } from '@/shared/ports/queue.port';
-import { JobEventsService } from '@/worker/job-events.service';
+import { JobTransitions } from '@/worker/job-transitions';
 import { type JobContext, PipelineService } from '@/worker/pipeline/pipeline.service';
 
 const SHUTDOWN_GRACE_MS = 30_000;
@@ -19,7 +18,7 @@ const SHUTDOWN_GRACE_MS = 30_000;
 const BACKOFF_SEC: Record<number, number> = { 1: 2, 2: 5 };
 const TERMINAL = new Set(['ready', 'failed']);
 
-// docs/DESIGN.md §9.1 主迴圈、§9.2 handle、§9.4 失敗與重試。
+// docs/DESIGN.md §9.1 主迴圈、§9.2 handle、§9.4 失敗與重試的「決策」；狀態變更本身交給 JobTransitions。
 // worker_user 有 BYPASSRLS 才能跨租戶領佇列，但每件工作仍用訊息裡的 workspace_id 包 withTenant（§7.3）。
 @Injectable()
 export class WorkerService implements OnApplicationShutdown {
@@ -30,13 +29,10 @@ export class WorkerService implements OnApplicationShutdown {
     @Inject(ENV) private readonly env: Env,
     @Inject(DB) private readonly db: Db,
     @Inject(QUEUE) private readonly queue: QueuePort,
-    private readonly jobs: JobsRepository,
-    private readonly documents: DocumentsRepository,
-    private readonly events: JobEventsService,
+    private readonly transitions: JobTransitions,
     private readonly pipeline: PipelineService,
     private readonly log: PinoLogger,
   ) {
-    // 用 setContext 而不是 @InjectPinoLogger：後者的 token 靠 LoggerModule 建立時的掃描順序決定，太脆弱
     this.log.setContext(WorkerService.name);
   }
 
@@ -87,7 +83,7 @@ export class WorkerService implements OnApplicationShutdown {
     const { job_id: jobId, workspace_id: wsId } = msg.message;
     const attempt = msg.readCt;
 
-    const job = await withTenant(this.db, wsId, (tx) => this.jobs.findById(wsId, tx, jobId));
+    const job = await this.transitions.load(wsId, jobId);
     if (job === null) {
       this.log.warn(
         { job_id: jobId, msg_id: msg.msgId },
@@ -102,22 +98,15 @@ export class WorkerService implements OnApplicationShutdown {
       return;
     }
 
-    const document = await withTenant(this.db, wsId, async (tx) => {
-      await this.jobs.start(wsId, tx, jobId, attempt);
-      await this.documents.setStatus(wsId, tx, job.document_id, 'processing');
-      await this.events.emit(wsId, tx, {
-        job_id: jobId,
-        type: 'stage_changed',
-        stage: 'extracting',
-        progress: 10,
-        attempt,
-        message: null,
-        payload: null,
-      });
-      return this.documents.findById(wsId, tx, job.document_id);
-    });
+    const document = await this.transitions.start(job, attempt);
     if (document === null) {
-      await this.fail(msg, job, attempt, ErrorCode.STORAGE_READ_FAILED, 'Document row is missing.');
+      await this.failOrRetry(
+        msg,
+        job,
+        attempt,
+        ErrorCode.STORAGE_READ_FAILED,
+        'Document row is missing.',
+      );
       return;
     }
 
@@ -125,78 +114,37 @@ export class WorkerService implements OnApplicationShutdown {
     try {
       const text = await this.pipeline.extract(ctx);
       const chunkCount = await this.pipeline.embed(ctx, text);
-      await this.finalize(msg, ctx, chunkCount);
+      await this.transitions.complete(job, attempt, msg.msgId, chunkCount);
+      this.log.info(
+        { job_id: job.id, document_id: document.id, chunk_count: chunkCount },
+        'job ready',
+      );
     } catch (err) {
       const { code, message } = classify(err);
       this.log.warn({ job_id: jobId, attempt, code, err }, 'job attempt failed');
-      await this.fail(msg, job, attempt, code, message);
+      await this.failOrRetry(msg, job, attempt, code, message);
     }
   }
 
-  // §9.3 ready：只寫狀態；訊息歸檔與 completed 事件同一交易
-  private async finalize(msg: QueueMessage, ctx: JobContext, chunkCount: number): Promise<void> {
-    const { job, document, attempt } = ctx;
-    const wsId = job.workspace_id;
-    await withTenant(this.db, wsId, async (tx) => {
-      await this.documents.markReady(wsId, tx, document.id, chunkCount);
-      await this.jobs.markReady(wsId, tx, job.id);
-      await this.events.emit(wsId, tx, {
-        job_id: job.id,
-        type: 'completed',
-        stage: null,
-        progress: 100,
-        attempt,
-        message: null,
-        payload: { chunk_count: chunkCount },
-      });
-      await this.queue.archive(tx, msg.msgId);
-    });
-    this.log.info(
-      { job_id: job.id, document_id: document.id, chunk_count: chunkCount },
-      'job ready',
-    );
-  }
-
-  // §9.4
-  private async fail(
+  // §9.4：未達 max_attempts 就排重試（退避 2 秒 / 5 秒），否則最終失敗
+  private failOrRetry(
     msg: QueueMessage,
-    job: { id: string; workspace_id: string; document_id: string; max_attempts: number },
+    job: JobRow,
     attempt: number,
     code: WorkerErrorCode,
     message: string,
   ): Promise<void> {
-    const wsId = job.workspace_id;
     if (attempt < job.max_attempts) {
-      const backoff = BACKOFF_SEC[attempt] ?? 5;
-      await withTenant(this.db, wsId, async (tx) => {
-        await this.jobs.markRetry(wsId, tx, job.id, code, message);
-        await this.events.emit(wsId, tx, {
-          job_id: job.id,
-          type: 'retry_scheduled',
-          stage: null,
-          progress: 0,
-          attempt,
-          message,
-          payload: { code, next_in_sec: backoff },
-        });
-        await this.queue.setVt(tx, msg.msgId, backoff);
-      });
-      return;
-    }
-    await withTenant(this.db, wsId, async (tx) => {
-      await this.jobs.markFailed(wsId, tx, job.id, code, message);
-      await this.documents.setStatus(wsId, tx, job.document_id, 'failed');
-      await this.events.emit(wsId, tx, {
-        job_id: job.id,
-        type: 'failed',
-        stage: null,
-        progress: 0,
+      return this.transitions.retry(
+        job,
         attempt,
+        msg.msgId,
+        code,
         message,
-        payload: { code, reason: ErrorCode.MAX_ATTEMPTS_EXCEEDED },
-      });
-      await this.queue.archive(tx, msg.msgId);
-    });
+        BACKOFF_SEC[attempt] ?? 5,
+      );
+    }
+    return this.transitions.fail(job, attempt, msg.msgId, code, message);
   }
 
   private track(p: Promise<void>): Promise<void> {
