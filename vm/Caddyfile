@@ -1,0 +1,7 @@
+# 對外唯一入口。SITE_ADDRESS 來自 vm/.env：
+#   - 有 domain（含 nip.io）：doc-ingest.35.187.151.236.nip.io → Caddy 自動向 Let's Encrypt 拿憑證、自動續期
+#   - 只有 IP：:80 → 純 HTTP
+# SSE 不用特別設定：Caddy 的 reverse_proxy 預設不緩衝回應，事件會即時往外送。
+{$SITE_ADDRESS} {
+	reverse_proxy api:3000
+}
