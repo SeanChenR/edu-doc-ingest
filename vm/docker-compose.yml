@@ -44,14 +44,9 @@ services:
       - storage:/app/storage
     depends_on:
       - db
+    # 邏輯在 vm/healthcheck.ts；指令不能有引號或括號，podman-compose 拼 shell 字串會弄壞
     healthcheck:
-      test:
-        [
-          "CMD",
-          "bun",
-          "-e",
-          "fetch('http://localhost:3000/health').then(r => process.exit(r.ok ? 0 : 1))",
-        ]
+      test: bun vm/healthcheck.ts api
       interval: 10s
       timeout: 3s
       retries: 5
@@ -74,13 +69,7 @@ services:
     depends_on:
       - db
     healthcheck:
-      test:
-        [
-          "CMD",
-          "bun",
-          "-e",
-          "process.exit(Date.now() - Bun.file('/app/storage/.worker-heartbeat').lastModified < 30000 ? 0 : 1)",
-        ]
+      test: bun vm/healthcheck.ts worker
       interval: 10s
       timeout: 3s
       retries: 5
