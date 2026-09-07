@@ -13,7 +13,8 @@ ENV_FILE=vm/.env
 # shellcheck disable=SC1090
 set -a; source "$ENV_FILE"; set +a
 
-COMPOSE=(podman compose -f vm/docker-compose.yml -p doc-ingest)
+# podman-compose 會先 chdir 到 compose 檔的目錄再開檔，-f 給相對路徑會找不到自己，所以用絕對路徑
+COMPOSE=(podman compose -f "$PWD/vm/docker-compose.yml" -p doc-ingest)
 step() { printf '\n== %s\n' "$1"; }
 
 step "0. git pull"
@@ -52,7 +53,7 @@ else
 fi
 for i in $(seq 1 12); do
   if curl -fsS --max-time 5 "$URL"; then echo; break; fi
-  [[ $i -eq 12 ]] && { echo "ready 沒回 200：podman compose -f vm/docker-compose.yml -p doc-ingest logs caddy api" >&2; exit 1; }
+  [[ $i -eq 12 ]] && { echo "ready 沒回 200：podman compose -f \$PWD/vm/docker-compose.yml -p doc-ingest logs caddy api" >&2; exit 1; }
   sleep 5
 done
 

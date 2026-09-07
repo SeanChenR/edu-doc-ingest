@@ -40,7 +40,7 @@ API_URL=https://doc-ingest.<IP>.nip.io API_KEY_ALPHA=<vm/.env 的 ALPHA> API_KEY
 ## 日常
 
 ```bash
-C='podman compose -f vm/docker-compose.yml -p doc-ingest'
+C="podman compose -f $PWD/vm/docker-compose.yml -p doc-ingest"   # 在 repo 根目錄；-f 要絕對路徑（podman-compose 會 chdir）
 $C ps                         # 四個容器都要 healthy / running
 $C logs -f api worker         # JSON log（LOG_PRETTY 預設 false）
 $C exec db psql -U postgres doc_ingest   # 看資料；DB 沒開對外 port，只有這條路
