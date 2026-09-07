@@ -1,0 +1,107 @@
+# VM 部署用的 compose，從根目錄 docker-compose.yml 複製後修改；根目錄那份是本機用的，不動。
+# 執行位置不限，一律：podman compose -f vm/docker-compose.yml -p doc-ingest <cmd>（vm/deploy.sh 包好了）
+# 變數來自同目錄的 vm/.env（compose 自動讀），範本在 vm/.env.example。
+#
+# 跟根目錄版本的差別只有三層：
+#   1. 網路：db、api 不開任何 port；對外只有 caddy 的 80 / 443
+#   2. 密碼：三組 DB 密碼與兩把 seed key 沒有 fallback，缺了直接報錯
+#   3. 誰跑 migrate / seed：在 api 的 image 裡（compose run --rm api bun run migrate），VM 不裝 Bun
+# 另外 restart: always，配合 `loginctl enable-linger`，SSH 斷線容器照跑。
+# image 名稱寫完整 registry（docker.io/...），rootless podman 不依賴 unqualified-search-registries。
+services:
+  db:
+    image: docker.io/pgvector/pgvector:pg18-trixie
+    environment:
+      POSTGRES_DB: doc_ingest
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in vm/.env}
+    volumes:
+      - db-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d doc_ingest"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: always
+
+  api:
+    build:
+      context: .. # repo 根目錄；Dockerfile 不變
+      target: api
+    environment:
+      PORT: 3000
+      DATABASE_URL: postgres://app_user:${APP_DB_PASSWORD:?set APP_DB_PASSWORD in vm/.env}@db:5432/doc_ingest
+      DATABASE_URL_WORKER: postgres://worker_user:${WORKER_DB_PASSWORD:?set WORKER_DB_PASSWORD in vm/.env}@db:5432/doc_ingest
+      DB_CONNECT_RETRY_SEC: 30
+      STORAGE_ROOT: /app/storage
+      # 下面五個只給 `compose run --rm api bun run migrate|seed` 用；api 本身不讀
+      DATABASE_URL_ADMIN: postgres://postgres:${POSTGRES_PASSWORD}@db:5432/doc_ingest
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD}
+      WORKER_DB_PASSWORD: ${WORKER_DB_PASSWORD}
+      SEED_API_KEY_ALPHA: ${SEED_API_KEY_ALPHA:?set SEED_API_KEY_ALPHA in vm/.env}
+      SEED_API_KEY_BETA: ${SEED_API_KEY_BETA:?set SEED_API_KEY_BETA in vm/.env}
+    volumes:
+      - storage:/app/storage
+    depends_on:
+      - db
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "bun",
+          "-e",
+          "fetch('http://localhost:3000/health').then(r => process.exit(r.ok ? 0 : 1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: always
+
+  worker:
+    build:
+      context: ..
+      target: worker
+    environment:
+      DATABASE_URL: postgres://app_user:${APP_DB_PASSWORD}@db:5432/doc_ingest
+      DATABASE_URL_WORKER: postgres://worker_user:${WORKER_DB_PASSWORD}@db:5432/doc_ingest
+      DB_CONNECT_RETRY_SEC: 30
+      STORAGE_ROOT: /app/storage
+      # 驗收環境：留著失敗注入與階段延遲，面試官才看得到 SSE 進度與重試；正式環境 false / 0（README §10）
+      FAILURE_INJECTION: ${FAILURE_INJECTION:-true}
+      STAGE_DELAY_MS: ${STAGE_DELAY_MS:-800}
+    volumes:
+      - storage:/app/storage
+    depends_on:
+      - db
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "bun",
+          "-e",
+          "process.exit(Date.now() - Bun.file('/app/storage/.worker-heartbeat').lastModified < 30000 ? 0 : 1)",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: always
+
+  # 反向代理：對外唯一入口。SITE_ADDRESS 是 domain（自動 Let's Encrypt）或 :80（只有 IP 時）
+  caddy:
+    image: docker.io/library/caddy:2
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:?set SITE_ADDRESS in vm/.env}
+    ports:
+      - "${CADDY_HTTP_PORT:-80}:80"
+      - "${CADDY_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data # 憑證放這裡，重建容器不用重新申請
+    depends_on:
+      - api
+    restart: always
+
+volumes:
+  db-data:
+  storage:
+  caddy-data:
